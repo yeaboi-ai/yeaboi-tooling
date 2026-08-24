@@ -1,0 +1,13 @@
+{
+  "name": "yeaboi-tooling",
+  "owner": {
+    "name": "Omar Din"
+  },
+  "plugins": [
+    {
+      "name": "yeaboi-devkit",
+      "source": "./plugins/yeaboi-devkit",
+      "description": "The yeaboi development workflow — /ship, /sync-main, /wt, /pr-feedback, /babysit-prs, /migrate, the review and fix agents, and the format + verify hooks. Shared by every yeaboi repo."
+    }
+  ]
+}

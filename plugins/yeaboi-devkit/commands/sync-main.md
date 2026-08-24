@@ -1,0 +1,43 @@
+---
+description: Rebase the current worktree branch on latest main and re-verify
+---
+
+Bring the current feature branch up to date with `origin/main`.
+
+1. Run `git branch --show-current`. If on `main`, just run `git pull --ff-only` and stop.
+2. `git fetch origin`. Report the drift: `git rev-list --count HEAD..origin/main`.
+3. If the working tree is dirty, stash first (`git stash push -u -m "sync-main autostash"`) and
+   remember to pop at the end. Use the message — the stash stack is shared with every other worktree
+   of this repo, and a bare `git stash pop` can take somebody else's work.
+4. `git rebase origin/main` — **`origin/main`, never local `main`**, which in a worktree is routinely
+   several commits behind and would rebase you onto a base that no longer exists upstream.
+5. Resolve conflicts with the playbook below. Pop the stash if one was created, resolving the same way.
+6. Re-verify on the new base: `make test-scoped` + `make lint`. If the rebase touched **any generated
+   file**, run `make ship-gate` instead — a scoped test run cannot see a stale bundle, a stale
+   fixture, or a package that lost a generated tree.
+7. Report: how many commits the branch was behind, every conflict and how it was resolved, and the
+   verification result.
+
+## Conflict playbook
+
+**Read `.claude/repo-notes.md` § Conflict playbook first if this repo has one.** It names this
+repo's generated files and the resolution each one needs, and it beats every general rule below.
+
+The rules that hold in every repo:
+
+- **A generated file is rebuilt, never chosen.** For a bundle, a lockfile, a snapshot or a vendored
+  contract that conflicts, *both* sides are stale. Taking either produces a tree that merges green
+  and reds the next build. Get git out of the conflicted state however is convenient, then re-run the
+  generator and commit what it wrote.
+- **Never a `union` merge driver** on generated output — it interleaves two builds into something
+  that is syntactically plausible and semantically garbage.
+- **Name a side by what it is, never by `--ours`/`--theirs`.** Those two flags *invert* under rebase:
+  `git rebase origin/main` replays your commits onto upstream, so `--ours` is `origin/main` and
+  `--theirs` is your own work — the opposite of what they mean in a merge. "Take the upstream side"
+  is unambiguous in both; "take theirs" is a coin flip.
+- **A version bump or a prepend-only changelog** conflicts by construction between any two
+  release-worthy PRs. Keep upstream's and drop yours; the release automation re-applies it.
+- **Two-way-bound registries** (a capability row and the entry another file must carry for it) keep
+  **both** sides, in **both** files. A resolution that keeps one side only reds the parity checks.
+- **Anything else** is a genuine overlap — merge both intents and say in the report what you did and
+  why.

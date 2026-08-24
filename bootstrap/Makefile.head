@@ -1,0 +1,33 @@
+# --- shared tooling (yeaboi-tooling, pinned by .tooling-rev) ------------------
+#
+# Paste this block at the top of the repo's Makefile, verbatim. It clones the
+# tooling repo to `.tooling/` at the pinned sha and includes the shared targets
+# (wt-*, tooling-*, contracts-*). The clone happens at parse time and only when
+# the pin and the checkout disagree, so the steady state is two file reads and
+# no network — and a fresh `git worktree add`, which never populates a
+# submodule, provisions itself on the first `make`.
+#
+# Bump the pin with `make tooling-bump` and commit `.tooling-rev`.
+
+TOOLING      := .tooling
+TOOLING_REV  := $(shell tr -d '[:space:]' < .tooling-rev 2>/dev/null)
+TOOLING_HAVE := $(shell tr -d '[:space:]' < $(TOOLING)/.git/tooling-rev 2>/dev/null)
+
+ifeq ($(TOOLING_REV),)
+$(error missing .tooling-rev — this repo pins the shared tooling by commit sha)
+endif
+ifneq ($(TOOLING_REV),$(TOOLING_HAVE))
+TOOLING_SYNC := $(shell bash scripts/tooling-sync.sh >&2 && echo ok)
+ifneq ($(TOOLING_SYNC),ok)
+$(error shared tooling could not be synced — see the [tooling] lines above)
+endif
+endif
+
+# The include brings targets with it, and the first target in a makefile is the
+# default goal. Name the goal explicitly so `make` with no arguments still
+# prints help rather than cutting a worktree.
+.DEFAULT_GOAL := help
+
+include $(TOOLING)/mk/common.mk
+
+# --- end shared tooling ------------------------------------------------------

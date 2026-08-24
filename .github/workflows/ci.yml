@@ -1,0 +1,42 @@
+# This repo's own CI. It cannot call the reusable Node workflow next to it —
+# the guards are pytest, and the shared halves are bash.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - run: uv python install 3.11
+      # shellcheck is preinstalled on ubuntu-latest, so `make lint` runs it here
+      # even though it is skipped-with-a-note on a machine without it.
+      - run: make lint
+      - run: make format-check
+      - run: make test
+      - run: make tooling-check
+
+  actionlint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # These files are consumed by four other repos through `workflow_call`; a
+      # syntax error here is a syntax error everywhere, and GitHub reports an
+      # unparseable workflow by silently never running it.
+      - run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color

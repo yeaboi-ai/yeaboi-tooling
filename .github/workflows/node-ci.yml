@@ -1,0 +1,56 @@
+# Reusable CI for a yeaboi Node/TypeScript repo (front end, desktop).
+#
+# Called, not run: a caller repo's `.github/workflows/ci.yml` is three lines. The
+# job names below become the caller's check names as `<caller job> / <job name>`,
+# so keep them stable and identical across the repos that call this — a ruleset's
+# required checks are matched by exact string.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+      # Repos differ in what they can prove in CI; a repo turns off what it does
+      # not have rather than defining an empty npm script that always passes.
+      run-build:
+        type: boolean
+        default: true
+      extra-target:
+        description: "One more `make` target to run after the gate (e.g. contracts-check)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Lint, typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: make install
+      - run: make lint
+      - run: make format-check
+      - run: make typecheck
+      - run: make test-fast
+      - if: inputs.run-build
+        run: make build
+      - if: inputs.extra-target != ''
+        run: make ${{ inputs.extra-target }}
+
+  tooling:
+    name: Shared tooling contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # `tooling-check` asserts the `.tooling` pin is honoured and that this repo
+      # defines every target the devkit's commands and hooks call on it. Without
+      # it, a renamed or deleted target is silent until somebody's Stop hook
+      # quietly stops verifying anything.
+      - run: make tooling-check

@@ -1,0 +1,19 @@
+# Worktrees live inside the checkout, in every yeaboi repo.
+.claude/worktrees/
+
+# The pinned tooling clone, in repos that consume this one. Present here only if
+# somebody ran a consumer's bootstrap by mistake.
+.tooling/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local environment
+.env
+
+# macOS
+.DS_Store

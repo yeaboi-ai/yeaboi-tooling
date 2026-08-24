@@ -1,0 +1,23 @@
+[project]
+name = "yeaboi-tooling"
+version = "0.1.0"
+description = "Shared development tooling for the yeaboi repos. Not a distribution — this file exists so the guards have a pinned test runner."
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+# Nothing here is importable, so there is nothing to build or install.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
