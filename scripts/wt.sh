@@ -104,7 +104,7 @@ resolve_base() {
     git_offline -C "$ROOT" remote set-head origin --auto >/dev/null 2>&1 || true
     head_ref="$(git -C "$ROOT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
   fi
-  [ -n "$head_ref" ] && DEFAULT_BRANCH="${head_ref#origin/}" || true
+  if [ -n "$head_ref" ]; then DEFAULT_BRANCH="${head_ref#origin/}"; fi
   if git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH"; then
     BASE_REF="origin/$DEFAULT_BRANCH"
   else
@@ -135,7 +135,7 @@ sync_local_default() {
       return 0
     fi
     after="$(git -C "$ROOT" rev-parse HEAD)"
-    [ "$before" != "$after" ] && echo "[wt] fast-forwarded '$DEFAULT_BRANCH' in the main checkout" || true
+    if [ "$before" != "$after" ]; then echo "[wt] fast-forwarded '$DEFAULT_BRANCH' in the main checkout"; fi
   elif git -C "$ROOT" worktree list --porcelain | grep -qFx "branch refs/heads/$DEFAULT_BRANCH"; then
     echo "[wt] note: '$DEFAULT_BRANCH' is checked out in another worktree — left alone"
   else
@@ -145,7 +145,7 @@ sync_local_default() {
     before="$(git -C "$ROOT" rev-parse "$DEFAULT_BRANCH" 2>/dev/null || echo none)"
     if git -C "$ROOT" fetch --quiet origin "$DEFAULT_BRANCH:$DEFAULT_BRANCH" 2>/dev/null; then
       after="$(git -C "$ROOT" rev-parse "$DEFAULT_BRANCH" 2>/dev/null || echo none)"
-      [ "$before" != "$after" ] && echo "[wt] fast-forwarded local '$DEFAULT_BRANCH'" || true
+      if [ "$before" != "$after" ]; then echo "[wt] fast-forwarded local '$DEFAULT_BRANCH'"; fi
     else
       echo "[wt] note: local '$DEFAULT_BRANCH' has diverged from $BASE_REF — left alone"
     fi
