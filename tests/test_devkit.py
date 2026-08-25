@@ -234,6 +234,19 @@ class TestBootstrap:
             "without this, a bare `make` cuts a worktree"
         )
 
+    def test_the_pin_reads_do_not_leak_to_stderr(self):
+        """`< missing 2>/dev/null` silences the command, not the shell's redirection.
+
+        A fresh worktree has no `.tooling/`, so the read misses on the very first
+        `make` — and printed a "No such file or directory" line above the sync it
+        was about to do anyway.
+        """
+        for line in _read(self.HEAD).splitlines():
+            if line.startswith(("TOOLING_REV", "TOOLING_HAVE")):
+                assert "cat " in line and "2>/dev/null |" in line, (
+                    f"read the pin through `cat … 2>/dev/null | tr`, not a `<` redirection: {line}"
+                )
+
     def test_the_head_syncs_before_it_includes(self):
         text = _read(self.HEAD)
         assert text.index("tooling-sync.sh") < text.index("include $(TOOLING)/mk/common.mk"), (

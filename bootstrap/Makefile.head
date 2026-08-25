@@ -10,8 +10,8 @@
 # Bump the pin with `make tooling-bump` and commit `.tooling-rev`.
 
 TOOLING      := .tooling
-TOOLING_REV  := $(shell tr -d '[:space:]' < .tooling-rev 2>/dev/null)
-TOOLING_HAVE := $(shell tr -d '[:space:]' < $(TOOLING)/.git/tooling-rev 2>/dev/null)
+TOOLING_REV  := $(shell cat .tooling-rev 2>/dev/null | tr -d '[:space:]')
+TOOLING_HAVE := $(shell cat $(TOOLING)/.git/tooling-rev 2>/dev/null | tr -d '[:space:]')
 
 ifeq ($(TOOLING_REV),)
 $(error missing .tooling-rev — this repo pins the shared tooling by commit sha)
