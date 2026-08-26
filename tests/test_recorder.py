@@ -169,6 +169,22 @@ class TestSharedTargets:
         for target in ("demo:", "demo-render:", "demo-check:"):
             assert f"\n{target}" in demo_mk, f"mk/demo.mk is missing {target}"
 
+    def test_demo_mk_only_claims_the_targets_when_a_spec_exists(self):
+        """A repo with its own recorder must keep it.
+
+        The yeaboi repo's `demo` predates the shared one and drives a
+        TUI-specific recorder. Unguarded, this fragment overrode it and make
+        printed "overriding commands for target `demo'" on every invocation.
+        """
+        demo_mk = (ROOT / "mk" / "demo.mk").read_text()
+        guard = "ifneq ($(wildcard $(DEMO_SPEC)),)"
+        assert guard in demo_mk
+        body = demo_mk.split(guard, 1)[1]
+        assert "\nendif" in body, "the guard must be closed"
+        recipes, _ = body.split("\nendif", 1)
+        for target in ("demo:", "demo-render:", "demo-check:"):
+            assert f"\n{target}" in recipes, f"{target} must sit inside the guard"
+
     def test_demo_mk_supplies_its_own_uv(self):
         # A Node repo's Makefile never defines UV, and the recorder is Python.
         assert "UV ?=" in (ROOT / "mk" / "demo.mk").read_text()
