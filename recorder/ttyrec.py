@@ -309,3 +309,5 @@ def render(cast_path: Path, gif_path: Path, agg_flags: list[str] | None = None) 
         if src is not cast_path:
             src.unlink(missing_ok=True)
     logger.info("gif written: %s (%d bytes)", gif_path, gif_path.stat().st_size)
+
+# (throwaway: exercising the clip nudge)
