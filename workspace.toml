@@ -1,0 +1,51 @@
+# The yeaboi workspace — the five repos that make one product, checked out side
+# by side. `make workspace-setup` reads this, `make workspace-status` reports on
+# it, and the nightly cross-repo check builds its matrix from the rows that
+# vendor a contract.
+#
+# `dir` is the directory the repo is cloned into, and it is not always the
+# repo's name: the Python repo's remote is `yeaboi.ai`.
+#
+# Read by scripts/workspace.py, which parses the strict subset used here —
+# [[repo]] tables of string and boolean values, one per line, no trailing
+# comments. Anything else raises rather than being quietly misread.
+
+[[repo]]
+name = "yeaboi"
+dir = "yeaboi.ai"
+url = "https://github.com/yeaboi-ai/yeaboi.ai.git"
+toolchain = "python"
+vendors = false
+holds = "all the Python — engines, TUI, CLI, MCP, Slack — and every contract the others vendor"
+
+[[repo]]
+name = "frontend"
+dir = "yeaboi-frontend"
+url = "https://github.com/yeaboi-ai/yeaboi-frontend.git"
+toolchain = "node"
+vendors = true
+holds = "every browser surface; publishes yeaboi-web-assets to PyPI and @yeaboi-ai/design to npm"
+
+[[repo]]
+name = "desktop"
+dir = "yeaboi-desktop"
+url = "https://github.com/yeaboi-ai/yeaboi-desktop.git"
+toolchain = "node"
+vendors = true
+holds = "the Electron shell over a released yeaboi wheel; publishes the installers"
+
+[[repo]]
+name = "site"
+dir = "yeaboi-site"
+url = "https://github.com/yeaboi-ai/yeaboi-site.git"
+toolchain = "python"
+vendors = true
+holds = "yeaboi.ai — flat HTML served off main by Pages, so merging is publishing"
+
+[[repo]]
+name = "tooling"
+dir = "yeaboi-tooling"
+url = "https://github.com/yeaboi-ai/yeaboi-tooling.git"
+toolchain = "python"
+vendors = false
+holds = "this repo — the devkit plugin, the Make fragments, and the worktree scripts"

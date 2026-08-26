@@ -19,15 +19,15 @@ help: ## Show this help
 install: ## Create the venv and install the test dependencies
 	$(UV) sync
 
-lint: shellcheck ## Lint the guards (ruff) and every shell script (shellcheck)
-	$(UV) run ruff check tests/
+lint: shellcheck ## Lint the Python (ruff) and every shell script (shellcheck)
+	$(UV) run ruff check scripts/ tests/
 
 format: ## Format with ruff (writes)
-	$(UV) run ruff format tests/
-	$(UV) run ruff check --fix tests/
+	$(UV) run ruff format scripts/ tests/
+	$(UV) run ruff check --fix scripts/ tests/
 
 format-check: ## What CI's format job runs — asserts, never writes
-	$(UV) run ruff format --check tests/
+	$(UV) run ruff format --check scripts/ tests/
 
 shellcheck: ## Shellcheck every script (skipped with a note when it is not installed)
 	@command -v shellcheck >/dev/null 2>&1 || { echo "[lint] skipped shellcheck — not on PATH (brew install shellcheck)"; exit 0; }

@@ -15,11 +15,17 @@ TOOLING_REPO ?= https://github.com/yeaboi-ai/yeaboi-tooling.git
 # (e.g. `CODE=cursor make wt-open NAME=my-feature`).
 CODE ?= code
 
+# The workspace script runs on whatever python3 the machine already has — it
+# imports nothing outside the standard library and nothing added after 3.9.
+PYTHON ?= python3
+WORKSPACE := $(PYTHON) $(TOOLING)/scripts/workspace.py
+
 # The targets the devkit plugin's commands and hooks invoke on any repo. A repo
 # that does not define one of these is missing half the workflow, silently.
 TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate
 
 .PHONY: wt-new wt-open wt-headless wt-issue wt-list wt-rm wt-rm-all \
+        wt-set wt-sets wt-set-rm workspace-setup workspace-status workspace-env \
         tooling-sync tooling-bump tooling-check contracts-sync contracts-check
 
 # --- worktrees ---------------------------------------------------------------
@@ -64,6 +70,38 @@ wt-rm-all: ## Remove ALL worktrees under .claude/worktrees/ (prompts to confirm)
 	    done; \
 	    git worktree prune; echo "[wt-rm-all] done."; \
 	  else echo "[wt-rm-all] aborted"; fi
+
+# --- the workspace -----------------------------------------------------------
+#
+# Five repos make one product, so some work is one feature in three of them.
+# These targets treat the sibling checkouts as one thing: `workspace.toml` in
+# the tooling repo names them, and everything below reads that.
+#
+# The root is the parent of the MAIN checkout you run from — not of $(CURDIR),
+# which inside a worktree is `.claude/worktrees/<name>`. Override with
+# YEABOI_WORKSPACE when the repos live somewhere else.
+
+workspace-setup: ## Clone every yeaboi repo side by side and provision each (idempotent)
+	@$(WORKSPACE) setup
+
+workspace-status: ## One screen: branch, working state and both pins, across every repo
+	@$(WORKSPACE) status
+
+# Printed rather than exported: make cannot change the shell that called it.
+workspace-env: ## The cross-repo dev exports — use as: eval "$$(make workspace-env)"
+	@$(WORKSPACE) env
+
+wt-set: ## Cut worktree NAME in each of REPOS="yeaboi frontend" (HEADLESS=1 to skip the editor)
+	$(need-name)
+	@test -n "$(REPOS)" || { echo 'usage: make wt-set NAME=<slug> REPOS="yeaboi frontend"'; exit 1; }
+	@$(WORKSPACE) wt-set "$(NAME)" --repos "$(REPOS)" $(if $(filter-out 0,$(HEADLESS)),--headless,)
+
+wt-sets: ## Which worktree names exist in which repos (a name in several is a set)
+	@$(WORKSPACE) wt-sets
+
+wt-set-rm: ## Remove worktree NAME from every repo in the workspace that has it
+	$(need-name)
+	@$(WORKSPACE) wt-set-rm "$(NAME)"
 
 # --- the tooling pin ---------------------------------------------------------
 
