@@ -25,6 +25,16 @@ class Bounds:
     min_distinct_colors: int = 64
 
     @classmethod
+    def for_clip(cls) -> Bounds:
+        """The floor for a feature clip, which is legitimately shorter than a demo.
+
+        A demo tours a whole surface; a clip shows one thing and can be over in
+        a few seconds. Only the floors move — the ceilings and the size limit
+        are what stop a clip from being a second demo.
+        """
+        return cls(frames=(20, 1500), duration_s=(3.0, 45.0))
+
+    @classmethod
     def from_spec(cls, raw: dict | None) -> Bounds:
         if not raw:
             return cls()

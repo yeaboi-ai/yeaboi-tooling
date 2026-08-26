@@ -8,8 +8,12 @@ is where the site serves them from and where the READMEs point.
     python recorder/record.py            # record + render + verify
     python recorder/record.py --render-only   # re-render from the cast (tty only)
     python recorder/record.py --check-only    # verify what is committed
+    python recorder/record.py --spec .demo/clips/x.py --gif out.gif --clip
+    python recorder/record.py --spec .demo/clips/x.py --replay   # drive it, render nothing
 
-Needs ``agg`` for terminal demos and ``ffmpeg`` for page demos.
+Needs ``agg`` for terminal demos and ``ffmpeg`` for page demos — but only to
+render. ``--replay`` drives the steps and asserts they resolve, which needs
+neither, so it is the one mode that runs on a bare CI runner.
 """
 
 from __future__ import annotations
@@ -42,8 +46,11 @@ class Spec:
     """One repo's demo, as declared in its ``demo_spec.py``."""
 
     kind: str  # "tty" | "page"
-    gif: str  # filename within the site checkout
     steps: list
+
+    # Filename within the site checkout. A clip is named by `make clip` from
+    # its spec filename and writes outside the site, so it leaves this unset.
+    gif: str = ""
 
     # terminal
     cmd: list[str] = field(default_factory=list)
@@ -111,7 +118,14 @@ class Spec:
         return Bounds.from_spec(self.verify)
 
 
-def load_spec(path: Path) -> Spec:
+def load_spec(path: Path, root: Path | None = None) -> Spec:
+    """Load a spec. ``root`` overrides where its relative paths anchor.
+
+    A repo's ``demo_spec.py`` sits at the repo root, so anchoring to the spec's
+    own directory is the same thing. A clip sits at ``.demo/clips/<slug>.py``,
+    where it is not — ``"cwd": "."`` there would mean the clips directory. The
+    clip target passes the repo root so both kinds of spec read the same way.
+    """
     import importlib.util
 
     if not path.is_file():
@@ -126,7 +140,7 @@ def load_spec(path: Path) -> Spec:
     unknown = set(raw) - known
     if unknown:
         sys.exit(f"{path}: unknown spec key(s) {sorted(unknown)}")
-    return Spec(**raw, root=path.parent)
+    return Spec(**raw, root=root or path.parent)
 
 
 def site_root() -> Path:
@@ -286,21 +300,61 @@ def assemble_gif(frames_dir: Path, gif_path: Path, spec: Spec) -> None:
 # --- entry point -------------------------------------------------------------
 
 
+def resolve_cast(spec: Spec, args) -> Path | None:
+    """Where the terminal cast lands. ``None`` means a throwaway temp file.
+
+    Only the last case needs the site checkout, so a clip naming its own
+    destination and a replay writing nothing both stay independent of it.
+    """
+    if args.cast is not None:
+        return args.cast
+    if args.gif is not None:
+        return args.gif.parent / f"{args.gif.stem}.cast.gz"
+    if args.replay:
+        return None
+    return site_root() / (spec.cast or spec.gif.replace(".gif", ".cast.gz"))
+
+
+def resolve_bounds(spec: Spec, args) -> Bounds:
+    """A spec's own bounds win; otherwise a clip gets a lower floor than a demo."""
+    if spec.verify:
+        return spec.bounds
+    return Bounds.for_clip() if args.clip else Bounds()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Record/render/verify a repo's demo GIF.")
     parser.add_argument("--spec", type=Path, default=Path("demo_spec.py"))
     parser.add_argument("--gif", type=Path, default=None, help="override the output path")
+    parser.add_argument("--cast", type=Path, default=None, help="override the cast path (terminal demos)")
     parser.add_argument("--render-only", action="store_true", help="re-render from the committed cast (tty only)")
     parser.add_argument("--check-only", action="store_true", help="verify what is committed and exit")
+    parser.add_argument("--replay", action="store_true", help="drive the steps and assert they resolve; render nothing")
+    parser.add_argument(
+        "--clip", action="store_true", help="a feature clip: relax the verify floor a full demo assumes"
+    )
+    parser.add_argument(
+        "--root", type=Path, default=None, help="anchor the spec's relative paths here (default: the spec's own dir)"
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="[recorder] %(message)s")
-    spec = load_spec(args.spec.resolve())
-    site = site_root()
-    gif_path = args.gif or (site / spec.gif)
+    spec = load_spec(args.spec.resolve(), args.root.resolve() if args.root else None)
+
+    # Resolved lazily: the site checkout is only needed when an artifact
+    # actually lands in it.
+    gif_path = args.gif
+    if gif_path is None and not args.replay:
+        if not spec.gif:
+            sys.exit(f"{args.spec}: no `gif` key — a spec that names no output needs --gif or --replay")
+        gif_path = site_root() / spec.gif
 
     if spec.kind == "tty":
-        cast_path = site / (spec.cast or spec.gif.replace(".gif", ".cast.gz"))
+        cast_path = resolve_cast(spec, args)
+        if args.replay:
+            with tempfile.TemporaryDirectory(prefix="yeaboi-replay-") as tmp:
+                ttyrec.record(spec, cast_path or Path(tmp) / "replay.cast.gz")
+            return _replayed(spec)
         if not args.check_only:
             if not args.render_only:
                 ttyrec.record(spec, cast_path)
@@ -318,16 +372,24 @@ def main(argv: list[str] | None = None) -> int:
                 if result["frames"] < 2:
                     sys.exit(f"captured only {result['frames']} frame(s) — the page never painted")
                 logger.info("captured %d frames over %.1fs", result["frames"], result["seconds"])
+                if args.replay:
+                    return _replayed(spec)
                 assemble_gif(frames_dir, gif_path, spec)
     else:
         sys.exit(f"unknown spec kind: {spec.kind!r} (expected 'tty' or 'page')")
 
-    problems = verify_gif(gif_path, spec.bounds)
+    problems = verify_gif(gif_path, resolve_bounds(spec, args))
     if problems:
         for p in problems:
             logger.error("%s", p)
         return 1
     logger.info("ok — %s (%d bytes)", gif_path, gif_path.stat().st_size)
+    return 0
+
+
+def _replayed(spec: Spec) -> int:
+    """Every step resolved. An ``await`` that did not would have raised."""
+    logger.info("ok — replayed %d step(s), rendered nothing", len(spec.steps))
     return 0
 
 
