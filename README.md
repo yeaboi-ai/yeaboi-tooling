@@ -1,10 +1,34 @@
-# yeaboi-tooling
+<div align="center">
 
-The development workflow every yeaboi repo shares, in one place: the Claude Code commands and agents,
-the hooks that verify a turn, the Make fragments, and the worktree scripts.
+<img src="https://yeaboi.ai/banner.jpg" alt="yeaboi.ai" width="800"/>
+
+# 🤙 yeaboi-tooling
+
+**The development workflow every yeaboi repo shares, in one place: the Claude Code commands and agents, the hooks that verify a turn, the Make fragments, and the worktree scripts.**
+
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+[![Part of yeaboi](https://img.shields.io/badge/part%20of-yeaboi-ff6600?style=for-the-badge)](https://github.com/yeaboi-ai/yeaboi.ai)
+
+[![CI](https://img.shields.io/github/actions/workflow/status/yeaboi-ai/yeaboi-tooling/ci.yml?style=for-the-badge&label=CI&logo=github)](https://github.com/yeaboi-ai/yeaboi-tooling/actions)
+
+</div>
+
+---
+
+<div align="center">
+<img src="https://yeaboi.ai/demo-tooling.gif" alt="A terminal running make workspace-status, showing branch, working state and both pins across all five yeaboi repos, then make wt-list" width="800"/>
+
+*Five checkouts, one command. `make demo` re-records this from `demo_spec.py`.*
+</div>
+
+---
+
+## What this is
 
 Five repos consume it — [`yeaboi`](https://github.com/yeaboi-ai/yeaboi.ai) (all the Python: engines,
-TUI, CLI, MCP, Slack), `yeaboi-frontend`, `yeaboi-desktop`, `yeaboi-site`, and this one.
+TUI, CLI, MCP, Slack), [`yeaboi-frontend`](https://github.com/yeaboi-ai/yeaboi-frontend),
+[`yeaboi-desktop`](https://github.com/yeaboi-ai/yeaboi-desktop),
+[`yeaboi-site`](https://github.com/yeaboi-ai/yeaboi-site), and this one.
 
 ## The two halves
 
@@ -95,6 +119,47 @@ exists.
 6. Run `make tooling-check` and put it in the repo's CI.
 7. Add a `[[repo]]` row to `workspace.toml` — that is what puts it in `make workspace-setup`,
    and (with `vendors = true`) in the nightly cross-repo check.
+8. Write a `demo_spec.py` describing the GIF its README opens with — `make demo` is part of the
+   required contract, so `tooling-check` fails until it has one. See *The demo recorder* below.
+
+## The demo recorder
+
+Every repo's README opens with a GIF of its own surface, and every one of those GIFs is
+reproducible: `make demo` re-records it from a `demo_spec.py` committed in the repo it shows.
+`demo` is in `TOOLING_REQUIRED_TARGETS`, and `mk/demo.mk` is included from `mk/common.mk`, so a
+repo satisfies the contract by supplying a spec and nothing else.
+
+One step vocabulary, two capture backends, one verifier:
+
+| `kind` | pipeline | needs |
+|---|---|---|
+| `"tty"` | a pty session → asciinema cast → `agg` | `brew install agg` |
+| `"page"` | CDP screencast → `ffmpeg` | `brew install ffmpeg` |
+
+The page backend drives Playwright, which also launches Electron — the desktop renderer throws
+`preload bridge missing` outside the shell, so it cannot be filmed by pointing a browser at its dev
+server. Playwright installs into `.tooling/recorder/` on first use, so **no consuming repo gains a
+devDependency**, and Electron comes from the repo that already has it.
+
+Frames come from `Page.startScreencast`, not a `page.screenshot()` loop. A screenshot of a full-size
+page costs more than a frame interval, so a loop either blocks or drops frames — and dropping them
+rescales the whole timeline, which turned a 13-second take into a 2.8-second one. The screencast is
+push-based and carries a timestamp per frame, so an ffmpeg concat list reproduces the original
+timing exactly.
+
+```bash
+make demo          # record, render, verify
+make demo-render   # re-render from the committed cast — terminal demos only
+make demo-check    # verify what is committed, without re-recording
+```
+
+Terminal demos commit a `.cast.gz` and re-render offline. Page demos commit only the GIF, because
+keeping every frame would add hundreds of megabytes to the site repo — re-rendering one means
+re-recording it, which needs its surface running. All of them are written into a **yeaboi-site**
+checkout, which is where the site serves them from and where every README points.
+
+Nothing here runs in CI. The output is committed and guarded, so the running-surface requirement is
+paid by whoever changes the product, never by a PR.
 
 ## Working on this repo
 
@@ -121,3 +186,7 @@ Deliberate, and each has a reason worth keeping visible:
   is a fragment that rots.
 - **Reusable `claude-review.yml` / `codeql.yml`** — same reason; they arrive with the repo that calls
   them, and org-level secrets with them.
+
+## 📄 License
+
+MIT License. See [LICENSE](LICENSE) for details.
