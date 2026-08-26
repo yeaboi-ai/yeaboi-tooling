@@ -29,6 +29,23 @@ jobs:
       - run: make test
       - run: make tooling-check
 
+  # Optional by construction: the nudge always exits 0 and neither job may be a
+  # required check. This repo passes tooling-dir '.' because its scripts are the
+  # source rather than a pinned copy of one.
+  clips:
+    name: Feature clips
+    uses: ./.github/workflows/clip-check.yml
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      tooling-dir: "."
+      surface-paths: |
+        recorder/*
+        mk/*.mk
+        scripts/*
+        plugins/yeaboi-devkit/commands/*
+
   actionlint:
     name: Workflow lint
     runs-on: ubuntu-latest
