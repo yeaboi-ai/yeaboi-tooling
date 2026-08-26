@@ -20,14 +20,14 @@ install: ## Create the venv and install the test dependencies
 	$(UV) sync
 
 lint: shellcheck ## Lint the Python (ruff) and every shell script (shellcheck)
-	$(UV) run ruff check scripts/ tests/
+	$(UV) run ruff check scripts/ tests/ recorder/
 
 format: ## Format with ruff (writes)
-	$(UV) run ruff format scripts/ tests/
-	$(UV) run ruff check --fix scripts/ tests/
+	$(UV) run ruff format scripts/ tests/ recorder/
+	$(UV) run ruff check --fix scripts/ tests/ recorder/
 
 format-check: ## What CI's format job runs — asserts, never writes
-	$(UV) run ruff format --check scripts/ tests/
+	$(UV) run ruff format --check scripts/ tests/ recorder/
 
 shellcheck: ## Shellcheck every script (skipped with a note when it is not installed)
 	@command -v shellcheck >/dev/null 2>&1 || { echo "[lint] skipped shellcheck — not on PATH (brew install shellcheck)"; exit 0; }
