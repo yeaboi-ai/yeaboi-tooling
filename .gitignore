@@ -17,3 +17,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Feature clips render here; only the spec in .demo/clips/ is committed.
+.demo/out/
