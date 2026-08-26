@@ -27,9 +27,24 @@ them by path — they live in the pinned `.tooling/` clone and take the project 
   --porcelain` from the main checkout) and has no unmerged work; warn and ask before removing
   anything dirty. Then run `make wt-rm NAME=<name>`.
 
+- `set <name> <repo> <repo>…` — run `make wt-set NAME=<name> REPOS="<repo> <repo>"` (add `HEADLESS=1`
+  when background agents will drive them). Cuts the same-named worktree in each named repo, for a
+  feature that spans several. Repos are named as `workspace.toml` names them — `yeaboi`, `frontend`,
+  `desktop`, `site`, `tooling` — or by directory. Ship upstream first: the downstream PR is what
+  carries the new pin.
+- `sets` — run `make wt-sets`: which worktree names exist in which repos, across the workspace. A
+  name in more than one repo is a set.
+- `set rm <name>` — run `make wt-set-rm NAME=<name>`, after the same cleanliness check as `rm`, in
+  every repo that has that worktree.
+
 Worktrees live under `<main checkout>/.claude/worktrees/`, in every repo. If the current directory is
 itself a worktree, the scripts already resolve the main checkout — just run the target from here.
 
 A fresh worktree has no `.tooling/` (it is gitignored, which is exactly why the shared tooling is a
 pinned clone and not a submodule — `git worktree add` does not populate submodules). The first `make`
 in it clones the pin automatically; nothing to do by hand.
+
+The workspace targets — `wt-set`, `wt-sets`, `wt-set-rm`, and `workspace-setup` / `workspace-status`
+/ `workspace-env` — reach the sibling checkouts, so they need the repos side by side under one
+directory. `make workspace-status` says which are missing; `make workspace-setup` clones and
+provisions them.

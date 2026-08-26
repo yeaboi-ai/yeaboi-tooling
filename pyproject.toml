@@ -2,7 +2,10 @@
 name = "yeaboi-tooling"
 version = "0.1.0"
 description = "Shared development tooling for the yeaboi repos. Not a distribution — this file exists so the guards have a pinned test runner."
-requires-python = ">=3.10"
+# 3.11 for tomllib: the guard that holds scripts/workspace.py's hand-rolled
+# manifest reader to a real TOML parser needs one in the standard library,
+# and a guard that skips itself on an older interpreter is not a guard.
+requires-python = ">=3.11"
 dependencies = []
 
 [dependency-groups]
@@ -14,7 +17,7 @@ package = false
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

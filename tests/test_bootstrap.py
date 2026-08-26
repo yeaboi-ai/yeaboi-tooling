@@ -57,6 +57,7 @@ def tooling(tmp_path: Path, env: dict[str, str]) -> tuple[Path, str]:
         shutil.copytree(ROOT / name, repo / name)
     (repo / ".claude-plugin").mkdir()
     shutil.copy(ROOT / ".claude-plugin" / "marketplace.json", repo / ".claude-plugin")
+    shutil.copy(ROOT / "workspace.toml", repo / "workspace.toml")
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "tooling"], check=True, env=env)
@@ -133,6 +134,19 @@ class TestTheBootstrapProvisionsItself:
 
         assert result.returncode == 0, result.stderr
         assert "BRANCH" in result.stdout, "mk/common.mk's wt-list did not run"
+
+    def test_the_workspace_targets_reach_the_manifest_inside_the_pin(
+        self, consumer: Path, tooling: tuple[Path, str], env: dict[str, str]
+    ) -> None:
+        """workspace.py and workspace.toml both live in `.tooling/`, and the
+        script resolves the manifest from its own location. Nothing else in the
+        shared half does that, so nothing else would notice it breaking."""
+        tooling_path, _ = tooling
+        result = _make(consumer, "workspace-status", env, tooling_path)
+
+        assert result.returncode == 0, result.stderr
+        assert "yeaboi-frontend" in result.stdout, "the manifest was not read"
+        assert "not cloned" in result.stdout
 
     def test_a_bare_make_prints_help_rather_than_cutting_a_worktree(
         self, consumer: Path, tooling: tuple[Path, str], env: dict[str, str]

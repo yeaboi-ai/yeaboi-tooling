@@ -65,6 +65,68 @@ green.
 Set `CONTRACTS_REPO` and `CONTRACTS_PATHS` in the repo's Makefile. Repos with no upstream contract
 leave both empty and the targets no-op.
 
+## The workspace
+
+The five repos are meant to sit side by side under one directory, because some work is one feature in
+three of them. `workspace.toml` in the tooling repo is the list; `scripts/workspace.py` reads it, and
+`mk/common.mk` exposes it, so these run from **any** repo:
+
+| Target | What it does |
+|---|---|
+| `workspace-setup` | Clone every repo side by side and run each one's `provision.sh`. Idempotent — an existing checkout is left exactly as it is |
+| `workspace-status` | Branch, ahead/behind, working state, `.tooling-rev` and `.contracts-rev`, for all five. Local refs only, so it is instant |
+| `workspace-env` | The cross-repo dev seams as shell exports: `eval "$(make workspace-env)"` |
+| `wt-set` `wt-sets` `wt-set-rm` | One feature's worktree across several repos |
+
+The root is the parent of the **main** checkout, not of `$(CURDIR)` — inside a worktree that would be
+`.claude/worktrees/`. Override with `YEABOI_WORKSPACE`.
+
+`workspace.py` imports nothing outside the standard library and nothing added after 3.9, including
+`tomllib`: it has to run under whatever `python3` a machine already has, and macOS ships 3.9. That is
+why the manifest reader is hand-rolled — and why `tests/test_workspace.py` holds it to `tomllib`'s
+answer on the real file, and why it raises on any construct it does not cover rather than guessing.
+
+### The dev seams
+
+Three, all of them one checkout serving another instead of a published artifact:
+
+- `YEABOI_WEB_STATIC` — the Python boards serve the front end's working build (`assets.py` checks it
+  before the installed `yeaboi_web_assets`).
+- `YEABOI_REPO` — the desktop shell's dev sidecar runs `yeaboi app` from a yeaboi working tree.
+- `YEABOI_DESKTOP_PYTHON` — an explicit interpreter, skipping uv resolution on every launch.
+
+Every one of those paths must exist: `assets.py` raises rather than falling back, and an absent
+interpreter is a sidecar that never starts. `workspace-env` comments out a seam whose target is not
+built and names the `make` that builds it.
+
+### A feature that spans repos
+
+`make wt-set NAME=x REPOS="yeaboi frontend"` cuts the same-named worktree in each. Nothing records
+the set — a recorded one goes stale the moment somebody removes a worktree by hand, so `wt-sets`
+reads the directories instead.
+
+**Ship upstream first.** The `yeaboi` PR merges; the downstream PR then carries the new
+`.contracts-rev`. There is no way to land both halves at once, and the manifest-match and
+`contracts-check` gates are red in between on purpose.
+
+## The nightly cross-repo check
+
+Every gate on a PR asks whether the change is green **against the pins it already has**. Nothing on a
+PR can ask whether the repos are green against the contracts and packages **as they are now**,
+because that answer changes when a different repo merges or publishes — a front end can ship a broken
+package at noon and the desktop finds out at its next PR, a fortnight later.
+
+`.github/workflows/nightly.yml` in the tooling repo asks it on a clock:
+
+- For each repo with `vendors = true`: check it out, `make contracts-sync` from `yeaboi.ai@main`, and
+  run **that repo's own `make ship-gate`**. The gate it trusts before shipping is the gate it should
+  survive against fresh contracts, so there is no checklist maintained centrally to rot.
+- For `yeaboi`: `uv lock --upgrade-package yeaboi-web-assets`, then the guards that read the
+  *shipped* bundles. Without the upgrade it would re-test the version yeaboi's own CI already tested.
+
+A red run opens one issue and comments on it thereafter. Fix it in the repo the run names — the
+nightly is not the thing that is wrong.
+
 ## `.claude/repo-notes.md`
 
 The shared commands carry the *procedure*; the repo carries its *facts*. `/ship` and `/sync-main`
