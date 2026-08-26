@@ -3,7 +3,8 @@ description: Ship the current feature branch — review, full gate, commit, push
 ---
 
 Ship the current feature branch. Arguments (optional): $ARGUMENTS — may include `auto-merge` to
-enable auto-merge for low-risk changes (docs/chores/small fixes only).
+enable auto-merge for low-risk changes (docs/chores/small fixes only), and `no-record` to skip the
+offer to attach a feature clip.
 
 The contract this branch must satisfy: tests for every change, lint clean, security scan clean, and
 whatever else this repo's gate covers — `make ship-gate` is the single command that decides. The
@@ -86,6 +87,10 @@ continuing. Never skip the verification steps.
    - Title: same style as the commit message.
    - Body: a Summary section (what and why), a Test plan section (what was run), and the standard
      "🤖 Generated with Claude Code" footer.
+   - **A `## Demo` section, if this change is worth seeing.** When the diff touches a user-facing
+     surface, offer `/record` before creating the PR and include the section it prints. A clip is
+     optional — take the offer once, and drop it if the user declines or the change is invisible.
+     `no-record` in `$ARGUMENTS` skips the offer entirely.
 
    **Some repos rewrite the branch a minute after the push** — a version-bump commit pushed onto the
    PR branch by CI, for instance. Where that is true, `.claude/repo-notes.md` says so and says what

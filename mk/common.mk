@@ -25,6 +25,12 @@ WORKSPACE := $(PYTHON) $(TOOLING)/scripts/workspace.py
 # only supplies its own demo_spec.py.
 include $(TOOLING)/mk/demo.mk
 
+# Feature clips — the per-PR counterpart to `demo`. Deliberately not in
+# TOOLING_REQUIRED_TARGETS: mk/clip.mk defines the targets unconditionally, so
+# every repo has them the moment it bumps the pin, and requiring a name that
+# always exists only adds a way to be red.
+include $(TOOLING)/mk/clip.mk
+
 # The targets the devkit plugin's commands and hooks invoke on any repo. A repo
 # that does not define one of these is missing half the workflow, silently.
 # `demo` is here because every repo's README opens with a GIF of its own

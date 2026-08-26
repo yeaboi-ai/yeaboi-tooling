@@ -158,8 +158,54 @@ keeping every frame would add hundreds of megabytes to the site repo — re-rend
 re-recording it, which needs its surface running. All of them are written into a **yeaboi-site**
 checkout, which is where the site serves them from and where every README points.
 
-Nothing here runs in CI. The output is committed and guarded, so the running-surface requirement is
-paid by whoever changes the product, never by a PR.
+Recording never runs in CI. The output is committed and guarded, so the running-surface requirement
+is paid by whoever changes the product, never by a PR. (Replaying a *clip* does run there — see
+below. It drives the steps without rendering, so it needs neither `agg` nor `ffmpeg` nor a second
+checkout, and the bargain above does not apply to it.)
+
+## Feature clips
+
+`demo` answers *what does this product look like*. A clip answers the question a reviewer actually
+has — **show me the thing this PR changes** — and it is optional, per PR, and cheap.
+
+```bash
+make clip SPEC=.demo/clips/my-feature.py   # record one clip into .demo/out/ (gitignored)
+make clip-replay                           # drive every committed spec, render nothing
+make clip-list                             # what this repo has
+```
+
+Same engine and same step vocabulary as a demo. Two differences, both in how it is driven: `--clip`
+lowers the verify floor (a demo tours a surface for six seconds or more; a clip can be over in
+three), and `--root` anchors the spec's relative paths at the repo root, so `"cwd": "."` means the
+same thing in a clip two directories down as it does in a root `demo_spec.py`.
+
+Unlike `mk/demo.mk`, these targets are **not** guarded on a spec existing — that guard is there
+because the yeaboi repo keeps its own `demo`, and `clip` collides with nothing. Every repo gets the
+targets on its next pin bump, including the one where most features land.
+
+Three pieces make a clip more than a picture:
+
+- **The spec is committed**, at `.demo/clips/<slug>.py`. The walkthrough is reviewable as part of
+  the diff, and re-recordable by anyone later.
+- **CI replays it.** An `await` step already fails when its marker never renders, so replay is a
+  working end-to-end test for free. A clip of a feature that has since broken stops replaying the
+  day it breaks, instead of quietly becoming a lie.
+- **The GIF is hosted per repo**, on an orphan `demo-media` branch at `clips/<branch>/<slug>.gif`.
+  Every yeaboi repo is public, so `raw.githubusercontent.com` renders it inline in the PR — no CDN
+  and no second PR to merge first. The branch shares no history with `main`, so a binary that
+  changes on every re-record never weighs on a clone of the code. The path is keyed on the branch,
+  not the PR number, so it works before the PR exists and updates in place after it does.
+
+```bash
+python3 .tooling/scripts/clip_publish.py .demo/out/my-feature.gif --markdown
+```
+
+`/record` does all of this — reads the diff, reads the repo's `## Clips` notes, writes the spec,
+records, publishes and attaches. `/ship` offers it when a diff touches a user-facing surface.
+
+A repo opts into the CI half by calling `clip-check.yml` from its own `ci.yml` with the globs that
+mean "a user could see this". **Neither of its jobs may ever be a required check** — the nudge
+always exits zero, and the whole point of a clip is that it is optional.
 
 ## Working on this repo
 

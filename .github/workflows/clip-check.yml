@@ -1,0 +1,99 @@
+# Reusable feature-clip check for any yeaboi repo.
+#
+# Called, not run. Two jobs, and NEITHER may ever be a required check — the
+# whole point of a clip is that it is optional:
+#
+#   nudge   the diff touches a user-facing surface and no clip is attached, so
+#           say so once. Always exits 0.
+#   replay  a committed clip spec is driven and asserted to resolve. This is
+#           what stops clips rotting: a walkthrough of a feature that no longer
+#           works stops replaying the day it breaks.
+#
+# mk/demo.mk says recording never runs on a PR. That holds for *rendering* — it
+# needs agg or ffmpeg and a second checkout to write into. `--replay` needs
+# neither, so the reasoning does not carry over.
+
+on:
+  workflow_call:
+    inputs:
+      surface-paths:
+        description: "Newline-separated globs that mean a user could see this change"
+        type: string
+        required: true
+      replay:
+        description: "Whether this repo's clips can be driven on a CI runner"
+        type: boolean
+        default: true
+      tooling-dir:
+        description: "Where the pinned tooling checkout lands. The tooling repo itself passes '.'"
+        type: string
+        default: ".tooling"
+
+permissions:
+  contents: read
+
+jobs:
+  nudge:
+    name: Feature clip
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # `.tooling/` is gitignored, so a fresh CI checkout has none. Any make
+      # target clones it at the pinned sha via the Makefile head; this is the
+      # cheapest one, and it keeps `.tooling-rev` authoritative in CI too.
+      # Skipped in the tooling repo, where the scripts are already the source.
+      - if: inputs.tooling-dir == '.tooling'
+        run: make tooling-sync
+      - id: check
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          SURFACES: ${{ inputs.surface-paths }}
+          BODY: ${{ github.event.pull_request.body }}
+          TOOLING_DIR: ${{ inputs.tooling-dir }}
+        run: python3 "${TOOLING_DIR}/scripts/clip_nudge.py" >> "$GITHUB_OUTPUT"
+      - if: steps.check.outputs.nudge == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SURFACE: ${{ steps.check.outputs.surface }}
+        # A sticky comment keyed on its own marker. It must NOT carry a
+        # `pr-feedback:` marker: scripts/pr_feedback.py counts those into a
+        # merge gate, which would turn an optional suggestion into a blocker.
+        run: |
+          marker='<!-- clip-nudge -->'
+          # shellcheck disable=SC2016  # the backticks are markdown code spans
+          body=$(printf '%s\n\n**No recording attached.** This PR touches `%s`.\n\nIf it changes what a user sees, `/record` will script a short clip of it, attach it here, and commit the walkthrough so CI can replay it later. Skip this freely — a clip is optional.\n' "$marker" "$SURFACE")
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            --jq "[.[] | select(.body | contains(\"${marker}\")) | .id] | first // empty")
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" -f body="$body" >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -f body="$body" >/dev/null
+          fi
+        continue-on-error: true
+
+  replay:
+    name: Replay feature clips
+    if: inputs.replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: specs
+        run: |
+          if compgen -G ".demo/clips/*.py" > /dev/null; then
+            echo "found=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=no" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.specs.outputs.found == 'yes'
+        uses: astral-sh/setup-uv@v7
+      - if: steps.specs.outputs.found == 'yes'
+        # No agg and no ffmpeg on the runner, by design: if `clip-replay` ever
+        # starts needing one, it has stopped being a replay.
+        run: make clip-replay
