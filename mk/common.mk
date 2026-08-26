@@ -20,9 +20,16 @@ CODE ?= code
 PYTHON ?= python3
 WORKSPACE := $(PYTHON) $(TOOLING)/scripts/workspace.py
 
+# `demo` is part of the required contract below, so it arrives with the rest of
+# the shared targets rather than needing a second include in every repo. A repo
+# only supplies its own demo_spec.py.
+include $(TOOLING)/mk/demo.mk
+
 # The targets the devkit plugin's commands and hooks invoke on any repo. A repo
 # that does not define one of these is missing half the workflow, silently.
-TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate
+# `demo` is here because every repo's README opens with a GIF of its own
+# surface, and a GIF nobody can re-record goes stale the first time the UI moves.
+TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate demo
 
 .PHONY: wt-new wt-open wt-headless wt-issue wt-list wt-rm wt-rm-all \
         wt-set wt-sets wt-set-rm workspace-setup workspace-status workspace-env \

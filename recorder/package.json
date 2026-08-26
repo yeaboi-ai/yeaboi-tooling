@@ -1,0 +1,10 @@
+{
+  "name": "@yeaboi-ai/recorder",
+  "private": true,
+  "type": "module",
+  "description": "The page capture backend for `make demo`. Installed into .tooling/ only, so no consuming repo gains a Playwright devDependency.",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.50.0"
+  }
+}
