@@ -21,12 +21,17 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# One stub per required target. `demo` is stubbed rather than driven by a
+# demo_spec.py because mk/demo.mk only claims the name when a spec exists —
+# a repo with its own recorder (the yeaboi repo has one) satisfies the
+# contract the same way this fixture does.
 MINIMAL_TARGETS = """
-.PHONY: lint test test-fast test-scoped ship-gate
+.PHONY: lint test test-fast test-scoped ship-gate demo
 lint: ; @echo lint
 test-fast: ; @echo test-fast
 test-scoped: test-fast
 test: test-fast
+demo: ; @echo demo
 ship-gate: lint test tooling-check ; @echo gate
 """
 
