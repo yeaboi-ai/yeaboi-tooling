@@ -5,10 +5,10 @@ One product, five repos, and every seam between them a pin: a wheel on PyPI, a
 package on npm, a vendored contract, a tooling sha. This is the local half of
 that. It clones them all (`setup`), shows them all at once (`status`), prints
 the environment that makes one checkout serve another (`env`), and cuts one
-feature's worktree across several of them (`wt-set`).
+feature's worktree across all of them at once (`wt-set`, reached as `make wt-new`).
 
-Reached through `make workspace-*` and `make wt-set*` in mk/common.mk, so it
-runs from any repo in the workspace, not only from this one.
+Reached through `make workspace-*` and `make wt-new` / `make wt-rm` in
+mk/common.mk, so it runs from any repo in the workspace, not only from this one.
 
 No third-party imports, and no `tomllib` either: this must run on whatever
 python3 a machine already has, and the system interpreter on macOS is 3.9. The
@@ -20,9 +20,12 @@ answer on the real file.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -155,6 +158,29 @@ def run(args: list[str], cwd: Path | None = None, quiet: bool = False) -> bool:
         sys.stdout.write(result.stdout or "")
         sys.stderr.write(result.stderr or "")
     return result.returncode == 0
+
+
+def run_capture(args: list[str], cwd: Path | None = None) -> tuple[bool, str]:
+    """`run`, but hand the output back instead of letting it reach the terminal.
+
+    The fan-out below runs five makes at once. Five children writing to one
+    terminal interleave line by line and the result is unreadable, so each one's
+    output is held and printed in a block when it finishes.
+
+    stderr is folded into stdout rather than appended after it: git narrates
+    ("Preparing worktree…") on stderr and the scripts on stdout, and two
+    concatenated streams put the narration after the conclusion it belongs to.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("MAKEFLAGS", "MAKELEVEL")}
+    result = subprocess.run(
+        args,
+        cwd=None if cwd is None else str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    return result.returncode == 0, result.stdout or ""
 
 
 # --- where the workspace is --------------------------------------------------
@@ -338,26 +364,181 @@ def worktrees(path: Path) -> list[str]:
     return sorted(p.name for p in home.iterdir() if (p / ".git").exists())
 
 
+# --- one feature, every repo -------------------------------------------------
+#
+# A worktree "set" is the same branch name cut in several repos and opened as
+# ONE editor window. Two things make that work, and both are deliberate.
+#
+# The per-repo cut always goes through that repo's `wt-headless`, never its
+# `wt-new`: `wt-new` IS this command, so calling it would recurse — and
+# `wt-headless` is also the one worktree target every repo already has at its
+# current `.tooling` pin, so a set can be cut before the siblings bump.
+#
+# Because those cuts are headless, wt.sh writes no per-folder `.vscode/`. The
+# multi-root window therefore has exactly one `folderOpen` task, and so exactly
+# one claude session — not one per root, five of them racing for the terminal.
+
+WT_SETS_DIR = ".worktrees"
+
+
+def code_workspace(root: Path, name: str) -> Path:
+    """Where a set's multi-root VS Code workspace file lives.
+
+    Beside the repos rather than inside one: it names paths in all of them, and
+    no single repo should be carrying a file about its siblings.
+    """
+    return root / WT_SETS_DIR / f"{name}.code-workspace"
+
+
+def write_code_workspace(root: Path, name: str, folders: list[tuple[str, Path]]) -> Path:
+    """One window over every repo's worktree, with one claude session over the lot.
+
+    `--add-dir` is what makes that session more than the folder it started in.
+    The cwd is the first folder, which is workspace.toml order, which is the
+    Python repo — the one whose contracts the others vendor.
+    """
+    primary = folders[0][1]
+    others = [str(path) for _, path in folders[1:]]
+    command = "claude"
+    if others:
+        command += " --add-dir " + " ".join(shlex.quote(path) for path in others)
+    spec = {
+        "folders": [{"name": label, "path": str(path)} for label, path in folders],
+        # Workspace-scoped, exactly as wt.sh writes it per folder: this is what
+        # skips VS Code's "allow automatic tasks?" prompt. Workspace Trust still
+        # asks once per unseen folder, and there is no setting that answers it.
+        "settings": {"task.allowAutomaticTasks": "on"},
+        "tasks": {
+            "version": "2.0.0",
+            "tasks": [
+                {
+                    "label": "claude",
+                    "type": "shell",
+                    "command": command,
+                    "options": {"cwd": str(primary)},
+                    "presentation": {
+                        "reveal": "always",
+                        "panel": "new",
+                        "focus": True,
+                        "clear": True,
+                        "showReuseMessage": False,
+                    },
+                    "runOptions": {"runOn": "folderOpen"},
+                    "problemMatcher": [],
+                }
+            ],
+        },
+    }
+    path = code_workspace(root, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(spec, indent=2) + "\n")
+    return path
+
+
+def tidy(output: str) -> str:
+    """Drop what only makes sense one repo at a time.
+
+    Each cut is a `make wt-headless`, so every repo narrates make's recipe line
+    and wt.sh's "drive it with a background agent" note. Neither is true of a set
+    — the window opens right after — and five copies of both bury the five lines
+    that matter. Only applied to a repo that succeeded; a failure keeps all of it.
+    """
+    return "\n".join(
+        line
+        for line in output.splitlines()
+        if not line.startswith("WT_REPO_DIR=") and "no VS Code auto-launch" not in line
+    )
+
+
+def drop_folder_task(tree: Path) -> None:
+    """Take a worktree's own auto-launch task away before it joins a set.
+
+    A headless cut never writes one, so this only bites on a worktree that
+    already existed from `make wt-one`: in a multi-root window its folderOpen
+    task would start a second claude beside the workspace-level one. The file is
+    generated and gitignored, so there is nothing here to lose.
+    """
+    tasks = tree / ".vscode" / "tasks.json"
+    if tasks.is_file() and "folderOpen" in tasks.read_text():
+        tasks.unlink()
+
+
+def open_workspace(path: Path, name: str) -> bool:
+    """Open the set in one editor window. A missing CLI is a note, not a failure:
+    the worktrees are already cut, and the file can be opened by hand."""
+    editor = os.environ.get("CODE") or "code"
+    if shutil.which(editor) is None:
+        print(f"[workspace] '{editor}' CLI not found on PATH — the worktrees are cut; open this by hand:")
+        print(f"[workspace]   {path}")
+        print("[workspace] in VS Code: Cmd-Shift-P → \"Shell Command: Install 'code' command in PATH\"")
+        print(f"[workspace] or name another editor: CODE=cursor make wt-new NAME={name}")
+        return False
+    if not run([editor, "-n", str(path)]):
+        return False
+    print(f"[workspace] opened '{name}' in {editor}; claude auto-starts in the integrated terminal")
+    return True
+
+
 def cmd_wt_set(args: argparse.Namespace) -> int:
     root = workspace_root(args.root)
-    chosen = select(args.repos.split())
-    target = "wt-headless" if args.headless else "wt-new"
-    failed = []
+    # No --repos means the whole workspace. That is the common case and the
+    # reason `make wt-new NAME=x` needs no second argument.
+    everywhere = not args.repos
+    chosen = repos() if everywhere else select(args.repos.split())
+
+    present, missing = [], []
     for repo in chosen:
-        path = root / repo.dir
-        if not (path / ".git").exists():
-            failed.append(f"{repo.name} (not cloned)")
-            continue
-        print(f"\n[workspace] {repo.name}: make {target} NAME={args.name}")
-        if not run(["make", "-C", str(path), target, f"NAME={args.name}"]):
-            failed.append(repo.name)
+        (present if (root / repo.dir / ".git").exists() else missing).append(repo)
+    for repo in missing:
+        print(f"[workspace] {repo.name}: not cloned — skipped (`make workspace-setup` clones it)")
+    if not present:
+        print(f"[workspace] nothing to cut '{args.name}' in — no repo in {root} is cloned")
+        return 1
+
+    # Not being cloned is a fact about the machine when the whole workspace was
+    # implied, and a mistake when the repo was named out loud.
+    failed = [] if everywhere else [repo.name for repo in missing]
+
+    print(f"[workspace] cutting '{args.name}' in {len(present)} repo(s), in parallel…")
+    sys.stdout.flush()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(present)) as pool:
+        pending = {
+            pool.submit(
+                run_capture,
+                ["make", "-C", str(root / repo.dir), "wt-headless", f"NAME={args.name}"],
+            ): repo
+            for repo in present
+        }
+        for future in concurrent.futures.as_completed(pending):
+            repo = pending[future]
+            ok, output = future.result()
+            print()
+            for line in (tidy(output) if ok else output).rstrip().splitlines():
+                print(f"[{repo.name}] {line}")
+            if not ok:
+                failed.append(repo.name)
+
+    # Manifest order, not completion order: the first folder is where the claude
+    # session starts, and which repo that is must not depend on which npm ci won.
+    cut = [repo for repo in present if repo.name not in failed]
     print()
     if failed:
         print(f"[workspace] could not cut '{args.name}' in: {', '.join(failed)}")
+    if not cut:
         return 1
-    print(f"[workspace] '{args.name}' is cut in {len(chosen)} repo(s).")
+
+    folders = [(repo.name, root / repo.dir / ".claude" / "worktrees" / args.name) for repo in cut]
+    for _, tree in folders:
+        drop_folder_task(tree)
+    path = write_code_workspace(root, args.name, folders)
+    print(f"[workspace] '{args.name}' is cut in {len(cut)} repo(s): {', '.join(name for name, _ in folders)}")
+    print(f"[workspace] one window over all of them: {path}")
+    if args.headless:
+        print("[workspace] headless — no editor; drive the worktrees with background agents")
+    else:
+        open_workspace(path, args.name)
     print("[workspace] ship upstream first — the downstream PR carries the new pin.")
-    return 0
+    return 1 if failed else 0
 
 
 def cmd_wt_sets(args: argparse.Namespace) -> int:
@@ -383,14 +564,30 @@ def cmd_wt_sets(args: argparse.Namespace) -> int:
 
 def cmd_wt_set_rm(args: argparse.Namespace) -> int:
     root = workspace_root(args.root)
+    chosen = repos() if not args.repos else select(args.repos.split())
     removed = []
-    for repo in repos():
+    for repo in chosen:
         path = root / repo.dir
-        if args.name in worktrees(path):
-            print(f"\n[workspace] {repo.name}: make wt-rm NAME={args.name}")
-            if run(["make", "-C", str(path), "wt-rm", f"NAME={args.name}"]):
-                removed.append(repo.name)
+        if args.name not in worktrees(path):
+            continue
+        print(f"\n[workspace] {repo.name}: make wt-one-rm NAME={args.name}")
+        # `wt-one-rm`, not `wt-rm`: `wt-rm` is this command, and calling it here
+        # would recurse. A repo still on an older .tooling pin has no
+        # `wt-one-rm` — there its `wt-rm` is the single-repo one, which is
+        # exactly what is wanted. Drop this fallback once every pin is bumped.
+        ok, output = run_capture(["make", "-C", str(path), "wt-one-rm", f"NAME={args.name}"])
+        if not ok and "No rule to make target" in output:
+            print(f"[workspace] {repo.name} is on an older .tooling pin — falling back to its wt-rm")
+            ok, output = run_capture(["make", "-C", str(path), "wt-rm", f"NAME={args.name}"])
+        print(output.rstrip())
+        if ok:
+            removed.append(repo.name)
+
     print()
+    spec = code_workspace(root, args.name)
+    if spec.is_file():
+        spec.unlink()
+        print(f"[workspace] removed {spec}")
     if not removed:
         print(f"[workspace] no repo has a worktree named '{args.name}'")
         return 1
@@ -408,15 +605,16 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("env", help="print the cross-repo dev exports")
     sub.add_parser("matrix", help="JSON of the repos that vendor a contract")
 
-    cut = sub.add_parser("wt-set", help="cut a same-named worktree in several repos")
+    cut = sub.add_parser("wt-set", help="cut a same-named worktree in every repo and open them as one window")
     cut.add_argument("name")
-    cut.add_argument("--repos", required=True, help='space-separated, e.g. "yeaboi frontend"')
-    cut.add_argument("--headless", action="store_true", help="no editor window per repo")
+    cut.add_argument("--repos", help='space-separated, e.g. "yeaboi frontend" (default: every repo)')
+    cut.add_argument("--headless", action="store_true", help="cut the worktrees, open no editor window")
 
     sub.add_parser("wt-sets", help="which worktree names exist in which repos")
 
     drop = sub.add_parser("wt-set-rm", help="remove a worktree name from every repo that has it")
     drop.add_argument("name")
+    drop.add_argument("--repos", help="space-separated (default: every repo that has it)")
 
     args = parser.parse_args(argv)
     handlers = {

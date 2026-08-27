@@ -1,4 +1,4 @@
-"""Tests for scripts/wt.sh — the git-worktree provisioning script behind `make wt-new`.
+"""Tests for scripts/wt.sh — the git-worktree provisioning script behind `make wt-one`.
 
 The script's job is to cut every new feature branch from the *freshly fetched*
 upstream default branch, so a stale main checkout cannot hand a worktree an old

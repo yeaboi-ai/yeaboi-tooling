@@ -11,9 +11,14 @@
 TOOLING ?= .tooling
 TOOLING_REPO ?= https://github.com/yeaboi-ai/yeaboi-tooling.git
 
-# Editor CLI used by `make wt-open`. Override for VS Code forks
-# (e.g. `CODE=cursor make wt-open NAME=my-feature`).
+# Editor CLI used by every target that opens a window. Override for VS Code
+# forks (e.g. `CODE=cursor make wt-new NAME=my-feature`).
 CODE ?= code
+
+# Which repos the workspace-wide wt-* targets touch. Empty means every repo in
+# workspace.toml — the common case, and the reason `make wt-new NAME=x` needs no
+# second argument. Narrow with REPOS="yeaboi frontend".
+REPOS ?=
 
 # The workspace script runs on whatever python3 the machine already has — it
 # imports nothing outside the standard library and nothing added after 3.9.
@@ -37,11 +42,25 @@ include $(TOOLING)/mk/clip.mk
 # surface, and a GIF nobody can re-record goes stale the first time the UI moves.
 TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate demo
 
-.PHONY: wt-new wt-open wt-headless wt-issue wt-list wt-rm wt-rm-all \
-        wt-set wt-sets wt-set-rm workspace-setup workspace-status workspace-env \
+.PHONY: wt-new wt-rm wt-set wt-set-rm wt-sets \
+        wt-one wt-one-rm wt-open wt-headless wt-issue wt-list wt-rm-all \
+        workspace-setup workspace-status workspace-env \
         tooling-sync tooling-bump tooling-check contracts-sync contracts-check
 
 # --- worktrees ---------------------------------------------------------------
+#
+# Two altitudes, and which one a target is at is the whole design:
+#
+#   wt-new / wt-rm  act on the WHOLE workspace. One feature is one branch of the
+#                   same name in every repo, opened as ONE multi-root VS Code
+#                   window with one claude session that can see all of them.
+#                   REPOS="yeaboi frontend" narrows them to a few.
+#
+#   wt-one / wt-open / wt-headless / wt-issue / wt-one-rm / wt-rm-all
+#                   act on THIS repo only. wt-headless in particular must never
+#                   widen: the plugin's unattended fan-out (/babysit-prs,
+#                   /migrate) cuts one worktree per PR with it, and five per PR
+#                   would be five branches nobody asked for.
 
 # Guard NAME= for every wt-* target without duplicating the message.
 define need-name
@@ -52,30 +71,55 @@ endef
 # they take the project from the environment rather than from their own path.
 WT_ENV := WT_REPO_DIR="$(CURDIR)" CODE="$(CODE)"
 
-wt-new: ## Create worktree .claude/worktrees/NAME off latest origin/main (branch + provision) + open in VS Code with claude auto-running
+# An unset REPOS must reach workspace.py as an ABSENT flag, not an empty string:
+# absent is what means "every repo in workspace.toml".
+WT_REPOS = $(if $(strip $(REPOS)),--repos "$(strip $(REPOS))",)
+WT_HEADLESS = $(if $(filter-out 0,$(HEADLESS)),--headless,)
+
+# --- the workspace-wide pair (what you type) ---------------------------------
+
+wt-new: ## Cut worktree NAME in EVERY repo + open them as one VS Code window (REPOS="…" narrows, HEADLESS=1 skips the editor)
+	$(need-name)
+	@CODE="$(CODE)" $(WORKSPACE) wt-set "$(NAME)" $(WT_REPOS) $(WT_HEADLESS)
+
+wt-rm: ## Remove worktree NAME from every repo that has it, and its .code-workspace (REPOS="…" narrows)
+	$(need-name)
+	@$(WORKSPACE) wt-set-rm "$(NAME)" $(WT_REPOS)
+
+# Kept because they read better when you are deliberately naming a few repos,
+# and because everything written before wt-new widened says it this way.
+wt-set: wt-new ## Alias for wt-new — the REPOS="…" spelling that predates it
+wt-set-rm: wt-rm ## Alias for wt-rm
+
+wt-sets: ## Which worktree names exist in which repos (a name in several is a set)
+	@$(WORKSPACE) wt-sets
+
+# --- the single-repo set (what scripts and agents call) ----------------------
+
+wt-one: ## Create worktree in THIS repo only, off latest origin/main, + open VS Code with claude auto-running
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" open
 
-wt-open: ## Open worktree in a NEW VS Code window with claude auto-running (creates it off latest origin/main first if needed)
+wt-open: ## Open THIS repo's worktree in a NEW VS Code window (creates it off latest origin/main first if needed)
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" open
 
-wt-headless: ## Create worktree off latest origin/main WITHOUT VS Code auto-launch (driven by background agents instead)
+wt-headless: ## Create worktree in THIS repo only WITHOUT VS Code auto-launch (driven by background agents instead)
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" headless
 
-wt-issue: ## Create worktree from the branch of GitHub issue N (linked branch / closing PR); HEADLESS=1 to skip VS Code
+wt-issue: ## Create worktree in THIS repo from the branch of GitHub issue N; HEADLESS=1 to skip VS Code
 	@test -n "$(ISSUE)" || { echo "usage: make wt-issue ISSUE=<number> [HEADLESS=1]"; exit 1; }
 	$(WT_ENV) bash $(TOOLING)/scripts/wt-issue.sh "$(ISSUE)" $(if $(filter-out 0,$(HEADLESS)),headless,open)
 
-wt-list: ## List worktrees (branch, clean/dirty, path)
+wt-list: ## List THIS repo's worktrees (branch, clean/dirty, path)
 	@bash $(TOOLING)/scripts/wt-list.sh
 
-wt-rm: ## Remove worktree dir + branch
+wt-one-rm: ## Remove THIS repo's worktree NAME (dir + branch)
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" rm
 
-wt-rm-all: ## Remove ALL worktrees under .claude/worktrees/ (prompts to confirm)
+wt-rm-all: ## Remove ALL worktrees under THIS repo's .claude/worktrees/ (prompts to confirm)
 	@read -r -p "Remove ALL .claude/worktrees/* worktrees and their branches? [y/N] " ans; \
 	  if [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
 	    for w in $$(git worktree list --porcelain | awk '/^worktree /{print $$2}' | grep "/.claude/worktrees/" || true); do \
@@ -104,17 +148,9 @@ workspace-status: ## One screen: branch, working state and both pins, across eve
 workspace-env: ## The cross-repo dev exports — use as: eval "$$(make workspace-env)"
 	@$(WORKSPACE) env
 
-wt-set: ## Cut worktree NAME in each of REPOS="yeaboi frontend" (HEADLESS=1 to skip the editor)
-	$(need-name)
-	@test -n "$(REPOS)" || { echo 'usage: make wt-set NAME=<slug> REPOS="yeaboi frontend"'; exit 1; }
-	@$(WORKSPACE) wt-set "$(NAME)" --repos "$(REPOS)" $(if $(filter-out 0,$(HEADLESS)),--headless,)
-
-wt-sets: ## Which worktree names exist in which repos (a name in several is a set)
-	@$(WORKSPACE) wt-sets
-
-wt-set-rm: ## Remove worktree NAME from every repo in the workspace that has it
-	$(need-name)
-	@$(WORKSPACE) wt-set-rm "$(NAME)"
+# wt-new / wt-rm / wt-sets are the other half of this — they reach the sibling
+# checkouts through the same script, and live up in the worktree section because
+# that is where you look for them.
 
 # --- the tooling pin ---------------------------------------------------------
 

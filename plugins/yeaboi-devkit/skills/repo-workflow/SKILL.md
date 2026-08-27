@@ -22,7 +22,8 @@ an Electron app and a static site.
 | `test-scoped` | Only what the working tree touches; falling back to `test-fast` is fine | the repo |
 | `test` | Everything a PR must pass locally | the repo |
 | `ship-gate` | The full gate `/ship` runs — lint, format, tests, and whatever else CI checks | the repo |
-| `wt-new` `wt-open` `wt-headless` `wt-issue` `wt-list` `wt-rm` | Worktree lifecycle | `mk/common.mk` |
+| `wt-new` `wt-rm` `wt-sets` | Worktree lifecycle, across the whole workspace | `mk/common.mk` |
+| `wt-one` `wt-open` `wt-headless` `wt-issue` `wt-list` `wt-one-rm` | The same, this repo alone | `mk/common.mk` |
 | `tooling-sync` `tooling-bump` `tooling-check` | The pin | `mk/common.mk` |
 | `contracts-sync` `contracts-check` | Vendored contracts (no-ops without an upstream) | `mk/common.mk` |
 
@@ -76,7 +77,7 @@ three of them. `workspace.toml` in the tooling repo is the list; `scripts/worksp
 | `workspace-setup` | Clone every repo side by side and run each one's `provision.sh`. Idempotent — an existing checkout is left exactly as it is |
 | `workspace-status` | Branch, ahead/behind, working state, `.tooling-rev` and `.contracts-rev`, for all five. Local refs only, so it is instant |
 | `workspace-env` | The cross-repo dev seams as shell exports: `eval "$(make workspace-env)"` |
-| `wt-set` `wt-sets` `wt-set-rm` | One feature's worktree across several repos |
+| `wt-new` `wt-sets` `wt-rm` | One feature's worktree across every repo, as one editor window |
 
 The root is the parent of the **main** checkout, not of `$(CURDIR)` — inside a worktree that would be
 `.claude/worktrees/`. Override with `YEABOI_WORKSPACE`.
@@ -101,9 +102,19 @@ built and names the `make` that builds it.
 
 ### A feature that spans repos
 
-`make wt-set NAME=x REPOS="yeaboi frontend"` cuts the same-named worktree in each. Nothing records
-the set — a recorded one goes stale the moment somebody removes a worktree by hand, so `wt-sets`
-reads the directories instead.
+`make wt-new NAME=x` cuts the same-named worktree in every repo, in parallel, and opens all of them
+as one multi-root VS Code window (`<workspace>/.worktrees/x.code-workspace`) running a single claude
+session with `--add-dir` over every worktree. `REPOS="yeaboi frontend"` narrows it; `HEADLESS=1`
+skips the window; `make wt-one NAME=x` is the single-repo cut.
+
+Per-repo cuts inside a set go through `wt-headless`, never `wt-new` — `wt-new` is the set command, so
+that would recurse, and `wt-headless` is the one worktree target every repo already has at whatever
+`.tooling` pin it is on, so a set can be cut before the siblings bump. Headless also means wt.sh
+writes no per-folder `.vscode/`, which is what keeps the window at one claude session rather than one
+per root.
+
+Nothing records the set — a recorded one goes stale the moment somebody removes a worktree by
+hand, so `wt-sets` reads the directories instead.
 
 **Ship upstream first.** The `yeaboi` PR merges; the downstream PR then carries the new
 `.contracts-rev`. There is no way to land both halves at once, and the manifest-match and
