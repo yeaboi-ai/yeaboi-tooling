@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # wt.sh <name> [open|headless|rm] — git-worktree lifecycle for parallel Claude sessions.
 #
-#   make wt-new NAME=my-feature       -> create .claude/worktrees/my-feature + provision + open VS Code
+# This is the SINGLE-REPO half. `make wt-new` cuts one feature across the whole
+# workspace and drives this script once per repo (headless) through
+# scripts/workspace.py, which then opens them as one multi-root window.
+#
+#   make wt-one NAME=my-feature       -> create .claude/worktrees/my-feature + provision + open VS Code
 #   make wt-headless NAME=my-feature  -> same, WITHOUT VS Code auto-launch; for worktrees driven by
 #                                        background agents from an orchestrating Claude session
-#   make wt-rm NAME=my-feature        -> remove worktree dir + git branch
+#   make wt-one-rm NAME=my-feature    -> remove worktree dir + git branch
 #
 # Lives in the shared tooling repo and is reached at `.tooling/scripts/wt.sh`,
 # so it must never assume where it is: the repo is resolved from the working
@@ -20,7 +24,7 @@
 #
 # Branch resolution order: an existing LOCAL branch is reused as-is; else an
 # existing REMOTE branch (origin/<name>) is checked out tracking its remote
-# counterpart — so `make wt-new NAME=<teammate-branch>` continues that branch
+# counterpart — so `make wt-one NAME=<teammate-branch>` continues that branch
 # instead of silently re-cutting a same-named one from origin/main; else a new
 # branch is cut from origin/main. wt-issue.sh resolves <name> from a GitHub
 # issue's linked branch / closing PR and delegates here.
@@ -31,7 +35,7 @@
 # Except for headless, .vscode/ auto-launch files are written so opening the
 # folder starts a claude session.
 #
-# Editor CLI comes from $CODE (default: code) — e.g. `CODE=cursor make wt-open NAME=my-feature`.
+# Editor CLI comes from $CODE (default: code) — e.g. `CODE=cursor make wt-one NAME=my-feature`.
 
 set -euo pipefail
 
@@ -57,7 +61,7 @@ ROOT="$(git -C "$ROOT" worktree list --porcelain | awk '/^worktree /{print $2; e
 # worktree would be cut in the tooling repo instead of the project.
 if [ -f "$ROOT/.claude-plugin/marketplace.json" ] && [ -d "$ROOT/mk" ] && [ -z "${WT_REPO_DIR:-}" ]; then
   echo "[wt] refusing to run: \$PWD resolves to the shared tooling repo, not a project." >&2
-  echo "     Run this from the project root (make wt-new NAME=…), or set WT_REPO_DIR." >&2
+  echo "     Run this from the project root (make wt-one NAME=…), or set WT_REPO_DIR." >&2
   exit 1
 fi
 
@@ -260,7 +264,7 @@ if [ "$ACTION" = "open" ]; then
   if ! command -v "$CODE" >/dev/null 2>&1; then
     echo "[wt] '$CODE' CLI not found on PATH." >&2
     echo "     In VS Code: Cmd-Shift-P → \"Shell Command: Install 'code' command in PATH\"" >&2
-    echo "     Or override the editor: CODE=cursor make wt-open NAME=$NAME" >&2
+    echo "     Or override the editor: CODE=cursor make wt-one NAME=$NAME" >&2
     exit 1
   fi
   "$CODE" -n "$TARGET"

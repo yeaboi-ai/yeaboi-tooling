@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -304,6 +305,142 @@ class TestWorktreeSets:
 
         assert code == 1
         assert "no repo has a worktree named" in capsys.readouterr().out
+
+
+class TestCuttingASet:
+    """`make wt-new` — one branch name, every repo, one editor window.
+
+    The per-repo cut is a `make` in another checkout, so it is stubbed here; what
+    these hold is the part this module actually owns — who gets cut, what the
+    window is made of, and what a rebuild of it removes.
+    """
+
+    @staticmethod
+    def _stub(monkeypatch: pytest.MonkeyPatch, calls: list, ok: bool = True):
+        """Stand in for `make -C <repo> wt-headless`, saying what it would say."""
+
+        def fake(args: list[str], cwd=None) -> tuple[bool, str]:
+            calls.append(args)
+            name = next(a.split("=", 1)[1] for a in args if a.startswith("NAME="))
+            if ok:
+                (Path(args[2]) / ".claude" / "worktrees" / name).mkdir(parents=True, exist_ok=True)
+            recipe = 'WT_REPO_DIR="' + args[2] + '" bash wt.sh headless'
+            return ok, f"{recipe}\n[wt] worktree ready: {name}\n"
+
+        monkeypatch.setattr(workspace, "run_capture", fake)
+        return fake
+
+    def test_no_repos_flag_means_every_repo(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The whole point: `make wt-new NAME=x` takes no second argument."""
+        workspace.main(["--root", str(fleet), "setup"])
+        calls: list = []
+        self._stub(monkeypatch, calls)
+
+        code = workspace.main(["--root", str(fleet), "wt-set", "wide", "--headless"])
+
+        assert code == 0
+        assert [args[3] for args in calls] == ["wt-headless"] * 2, "the cut must not recurse through wt-new"
+        assert {Path(args[2]).name for args in calls} == {"alpha", "beta"}
+
+    def test_an_uncloned_repo_is_skipped_when_the_workspace_is_implied(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """A machine missing a sibling must not lose the command that means 'all'."""
+        workspace.main(["--root", str(fleet), "setup"])
+        shutil.rmtree(fleet / "beta")
+        calls: list = []
+        self._stub(monkeypatch, calls)
+
+        code = workspace.main(["--root", str(fleet), "wt-set", "partial", "--headless"])
+        out = capsys.readouterr().out
+
+        assert code == 0
+        assert [Path(args[2]).name for args in calls] == ["alpha"]
+        assert "beta: not cloned — skipped" in out
+
+    def test_naming_an_uncloned_repo_is_a_failure(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Asking for it by name and silently not getting it is the bad case."""
+        workspace.main(["--root", str(fleet), "setup"])
+        shutil.rmtree(fleet / "beta")
+        self._stub(monkeypatch, [])
+
+        code = workspace.main(["--root", str(fleet), "wt-set", "named", "--repos", "alpha beta", "--headless"])
+
+        assert code == 1
+        assert "could not cut 'named' in: beta" in capsys.readouterr().out
+
+    def test_the_window_is_one_file_over_every_worktree(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._stub(monkeypatch, [])
+
+        workspace.main(["--root", str(fleet), "wt-set", "one-window", "--headless"])
+
+        spec = json.loads((fleet / ".worktrees" / "one-window.code-workspace").read_text())
+        folders = [f["path"] for f in spec["folders"]]
+        assert [f["name"] for f in spec["folders"]] == ["alpha", "beta"], "manifest order"
+        assert folders == [str(fleet / n / ".claude" / "worktrees" / "one-window") for n in ("alpha", "beta")]
+
+        (task,) = spec["tasks"]["tasks"]
+        assert task["options"]["cwd"] == folders[0], "the session starts in the first repo…"
+        assert folders[1] in task["command"] and "--add-dir" in task["command"], "…and can see the rest"
+        assert spec["settings"]["task.allowAutomaticTasks"] == "on", "else VS Code asks before starting claude"
+
+    def test_a_pre_existing_folder_task_is_removed(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A `wt-one` worktree joining a set would otherwise start a second
+        claude of its own beside the workspace-level one."""
+        workspace.main(["--root", str(fleet), "setup"])
+        self._stub(monkeypatch, [])
+        stale = fleet / "alpha" / ".claude" / "worktrees" / "reused" / ".vscode"
+        stale.mkdir(parents=True)
+        (stale / "tasks.json").write_text('{"tasks": [{"runOptions": {"runOn": "folderOpen"}}]}')
+
+        workspace.main(["--root", str(fleet), "wt-set", "reused", "--headless"])
+
+        assert not (stale / "tasks.json").exists()
+
+    def test_a_succeeding_repo_s_output_loses_what_only_fits_one_repo(self) -> None:
+        """Five copies of make's recipe line and of wt.sh's background-agent note
+        bury the five lines that say a worktree is ready."""
+        noisy = (
+            'WT_REPO_DIR="/x" CODE="code" bash .tooling/scripts/wt.sh "f" headless\n'
+            "[wt] worktree ready: /x/.claude/worktrees/f\n"
+            "[wt] headless — no VS Code auto-launch; drive it with a background agent\n"
+        )
+
+        assert workspace.tidy(noisy).splitlines() == ["[wt] worktree ready: /x/.claude/worktrees/f"]
+
+    def test_a_failing_repo_keeps_every_line(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Whatever is diagnostic about a failure is in the part tidy() removes."""
+        workspace.main(["--root", str(fleet), "setup"])
+        self._stub(monkeypatch, [], ok=False)
+
+        code = workspace.main(["--root", str(fleet), "wt-set", "broken", "--headless"])
+        out = capsys.readouterr().out
+
+        assert code == 1
+        assert "could not cut 'broken' in: alpha, beta" in out
+        assert "WT_REPO_DIR=" in out, "the recipe line tidy() drops is where a failure says what it ran"
+
+    def test_removing_a_set_takes_its_window_with_it(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._stub(monkeypatch, [])
+        workspace.main(["--root", str(fleet), "wt-set", "gone", "--headless"])
+        for name in ("alpha", "beta"):
+            (fleet / name / ".claude" / "worktrees" / "gone" / ".git").write_text("gitdir: elsewhere\n")
+        spec = fleet / ".worktrees" / "gone.code-workspace"
+        assert spec.is_file()
+
+        removals: list = []
+        self._stub(monkeypatch, removals)
+        code = workspace.main(["--root", str(fleet), "wt-set-rm", "gone"])
+
+        assert code == 0
+        assert [args[3] for args in removals] == ["wt-one-rm"] * 2, "wt-rm here would recurse"
+        assert not spec.exists()
 
 
 class TestTheNightly:

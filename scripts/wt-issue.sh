@@ -10,7 +10,7 @@
 #      closedByPullRequestsReferences — the reliable link, unlike grepping titles)
 #
 # Exactly one match is required; several are printed for the caller to pick from
-# with `make wt-new NAME=<branch>`. No interactive prompts — like wt.sh, this is
+# with `make wt-one NAME=<branch>`. No interactive prompts — like wt.sh, this is
 # an entry point for unattended fan-out, where a prompt hangs the orchestrating
 # agent forever.
 #
@@ -79,13 +79,13 @@ fi
 
 if [ -z "$CANDIDATES" ]; then
   echo "[wt-issue] issue #$NUM has no linked branch and no open same-repo PR that closes it." >&2
-  echo "[wt-issue] create a linked branch with \`gh issue develop $NUM\`, or use \`make wt-new NAME=<slug>\`." >&2
+  echo "[wt-issue] create a linked branch with \`gh issue develop $NUM\`, or use \`make wt-one NAME=<slug>\`." >&2
   exit 1
 fi
 
 COUNT="$(printf '%s\n' "$CANDIDATES" | wc -l | tr -d ' ')"
 if [ "$COUNT" != "1" ]; then
-  echo "[wt-issue] issue #$NUM has $COUNT candidate branches ($SOURCE) — pick one with \`make wt-new NAME=<branch>\`:" >&2
+  echo "[wt-issue] issue #$NUM has $COUNT candidate branches ($SOURCE) — pick one with \`make wt-one NAME=<branch>\`:" >&2
   printf '%s\n' "$CANDIDATES" | sed 's/^/[wt-issue]   /' >&2
   exit 1
 fi

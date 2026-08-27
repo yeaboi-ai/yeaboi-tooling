@@ -79,13 +79,23 @@ falling back and an absent interpreter is a sidecar that never starts.
 | `YEABOI_REPO` | run the desktop shell against a yeaboi working tree instead of the bundled runtime |
 | `YEABOI_DESKTOP_PYTHON` | skip uv resolution on every desktop launch |
 
-### One feature across several repos
+### One feature across every repo
+
+One product, so one feature is one branch name everywhere. `wt-new` cuts it in every repo at once —
+in parallel — and opens all of them as a **single** multi-root VS Code window with **one** claude
+session that can see every worktree:
 
 ```bash
-make wt-set NAME=poker-export REPOS="yeaboi frontend"   # same-named worktree in each
+make wt-new NAME=poker-export                           # all five, one window
+make wt-new NAME=poker-export REPOS="yeaboi frontend"   # narrow it to a few
+make wt-new NAME=poker-export HEADLESS=1                # cut them, open no editor
 make wt-sets                                            # what is cut where
-make wt-set-rm NAME=poker-export
+make wt-rm NAME=poker-export                            # every repo that has it
 ```
+
+Run it from any repo in the workspace. The window's file lands in `<workspace>/.worktrees/` beside
+the repos, because it names paths in all of them. `make wt-one NAME=…` is the single-repo cut when
+you really do want one.
 
 Nothing records a "set": a recorded one goes stale the moment somebody removes a worktree by hand,
 and the truth is a directory listing. **Ship upstream first** — the `yeaboi` PR merges, then the
