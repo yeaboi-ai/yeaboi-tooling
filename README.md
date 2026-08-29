@@ -89,9 +89,16 @@ session that can see every worktree:
 make wt-new NAME=poker-export                           # all five, one window
 make wt-new NAME=poker-export REPOS="yeaboi frontend"   # narrow it to a few
 make wt-new NAME=poker-export HEADLESS=1                # cut them, open no editor
+make wt-new NAME=poker-export                           # again: rebase them all onto origin/main
 make wt-sets                                            # what is cut where
 make wt-rm NAME=poker-export                            # every repo that has it
 ```
+
+Each repo branches `<name>` off freshly fetched `origin/main`, always as a **new** branch — an
+existing one is refused rather than quietly handing that repo an older base (`REUSE=1` continues it
+instead, rebased). Running the same command again is the refresh: every worktree in the set is
+rebased onto `origin/main`. A dirty worktree is skipped and a conflicting rebase is aborted, each
+with a note; `/sync-main` in that worktree is where you finish the job.
 
 Run it from any repo in the workspace. The window's file lands in `<workspace>/.worktrees/` beside
 the repos, because it names paths in all of them. `make wt-one NAME=…` is the single-repo cut when

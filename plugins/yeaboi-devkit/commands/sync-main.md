@@ -4,6 +4,11 @@ description: Rebase the current worktree branch on latest main and re-verify
 
 Bring the current feature branch up to date with `origin/main`.
 
+`make wt-new` / `make wt-one` already rebase a worktree onto `origin/main` when they can, and
+abort the rebase when it conflicts — this command is where that gets finished, and the only place
+the playbook below gets applied, because a dirty tree and a conflict are both judgement calls a
+provisioning script must not make.
+
 1. Run `git branch --show-current`. If on `main`, just run `git pull --ff-only` and stop.
 2. `git fetch origin`. Report the drift: `git rev-list --count HEAD..origin/main`.
 3. If the working tree is dirty, stash first (`git stash push -u -m "sync-main autostash"`) and

@@ -342,6 +342,22 @@ class TestCuttingASet:
         assert [args[3] for args in calls] == ["wt-headless"] * 2, "the cut must not recurse through wt-new"
         assert {Path(args[2]).name for args in calls} == {"alpha", "beta"}
 
+    def test_reuse_is_forwarded_to_every_repo(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """REUSE=1 is what lets wt.sh continue an existing branch instead of refusing it."""
+        workspace.main(["--root", str(fleet), "setup"])
+        calls: list = []
+        self._stub(monkeypatch, calls)
+
+        assert workspace.main(["--root", str(fleet), "wt-set", "shared", "--headless", "--reuse"]) == 0
+
+        assert all("REUSE=1" in args for args in calls)
+        # Appended, never inserted: the target is read positionally at [3].
+        assert [args[3] for args in calls] == ["wt-headless"] * 2
+
+        calls.clear()
+        assert workspace.main(["--root", str(fleet), "wt-set", "fresh", "--headless"]) == 0
+        assert not any("REUSE=1" in args for args in calls), "a plain cut must never reuse"
+
     def test_an_uncloned_repo_is_skipped_when_the_workspace_is_implied(
         self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ) -> None:
