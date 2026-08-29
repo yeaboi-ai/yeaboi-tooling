@@ -119,10 +119,12 @@ class TestTheManifest:
             "yeaboi-ai/yeaboi-tooling",
         }
 
-    def test_the_repos_that_vendor_a_contract_are_the_three_downstream_ones(self) -> None:
-        """The nightly's matrix. yeaboi is upstream of all of them and vendors
-        nothing; the tooling repo is consumed by sha, not by contract."""
-        assert {r.name for r in workspace.repos() if r.vendors} == {"frontend", "desktop", "site"}
+    def test_the_repos_that_vendor_a_contract_are_the_two_downstream_ones(self) -> None:
+        """The nightly's matrix. yeaboi is upstream of both and vendors nothing;
+        the tooling repo is consumed by sha, not by contract; and desktop
+        GENERATES its routes manifest rather than vendoring one, so re-vendoring
+        it there would fight the generator that owns the file."""
+        assert {r.name for r in workspace.repos() if r.vendors} == {"frontend", "site"}
 
     def test_the_matrix_command_emits_what_the_nightly_indexes(self) -> None:
         out = subprocess.run([sys.executable, str(SCRIPT), "matrix"], capture_output=True, text=True, check=True).stdout

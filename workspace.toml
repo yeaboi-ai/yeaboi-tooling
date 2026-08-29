@@ -31,7 +31,11 @@ name = "desktop"
 dir = "yeaboi-desktop"
 url = "https://github.com/yeaboi-ai/yeaboi-desktop.git"
 toolchain = "node"
-vendors = true
+# Not a vendor since the renderer migration: contracts/v1/routes_manifest.json
+# is GENERATED there, from the app's own route registry, and yeaboi.ai reads a
+# copy of it. Desktop is the producer of that contract, so it has no
+# .contracts-rev and nothing for the nightly cross-repo check to re-vendor.
+vendors = false
 holds = "the Electron shell over a released yeaboi wheel; publishes the installers"
 
 [[repo]]
