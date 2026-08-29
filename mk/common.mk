@@ -67,20 +67,26 @@ define need-name
 	@test -n "$(NAME)" || { echo "usage: make $@ NAME=<slug>  (e.g. NAME=standup-fix)"; exit 1; }
 endef
 
+# REUSE=1 is the opt-in that lets wt.sh continue an EXISTING branch (a teammate's,
+# an issue's) instead of refusing it. Without it a cut always means a new branch
+# off origin/main — which is what keeps one feature name on one base everywhere.
+WT_REUSE = $(if $(filter-out 0,$(REUSE)),1,)
+
 # The scripts live in the `.tooling` clone, which is its own git repository, so
 # they take the project from the environment rather than from their own path.
-WT_ENV := WT_REPO_DIR="$(CURDIR)" CODE="$(CODE)"
+WT_ENV = WT_REPO_DIR="$(CURDIR)" CODE="$(CODE)" WT_REUSE_BRANCH="$(WT_REUSE)"
 
 # An unset REPOS must reach workspace.py as an ABSENT flag, not an empty string:
 # absent is what means "every repo in workspace.toml".
 WT_REPOS = $(if $(strip $(REPOS)),--repos "$(strip $(REPOS))",)
 WT_HEADLESS = $(if $(filter-out 0,$(HEADLESS)),--headless,)
+WT_REUSE_FLAG = $(if $(WT_REUSE),--reuse,)
 
 # --- the workspace-wide pair (what you type) ---------------------------------
 
-wt-new: ## Cut worktree NAME in EVERY repo + open them as one VS Code window (REPOS="…" narrows, HEADLESS=1 skips the editor)
+wt-new: ## Cut NAME off latest origin/main in EVERY repo (re-run to rebase them onto it) + one VS Code window; REPOS="…" narrows, HEADLESS=1 skips the editor, REUSE=1 continues existing branches
 	$(need-name)
-	@CODE="$(CODE)" $(WORKSPACE) wt-set "$(NAME)" $(WT_REPOS) $(WT_HEADLESS)
+	@CODE="$(CODE)" $(WORKSPACE) wt-set "$(NAME)" $(WT_REPOS) $(WT_HEADLESS) $(WT_REUSE_FLAG)
 
 wt-rm: ## Remove worktree NAME from every repo that has it, and its .code-workspace (REPOS="…" narrows)
 	$(need-name)
@@ -96,7 +102,7 @@ wt-sets: ## Which worktree names exist in which repos (a name in several is a se
 
 # --- the single-repo set (what scripts and agents call) ----------------------
 
-wt-one: ## Create worktree in THIS repo only, off latest origin/main, + open VS Code with claude auto-running
+wt-one: ## Create worktree in THIS repo only, off latest origin/main (REUSE=1 continues an existing branch, rebased), + open VS Code with claude auto-running
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" open
 
@@ -104,7 +110,7 @@ wt-open: ## Open THIS repo's worktree in a NEW VS Code window (creates it off la
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" open
 
-wt-headless: ## Create worktree in THIS repo only WITHOUT VS Code auto-launch (driven by background agents instead)
+wt-headless: ## Create worktree in THIS repo only WITHOUT VS Code auto-launch (driven by background agents instead; REUSE=1 continues an existing branch)
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" headless
 

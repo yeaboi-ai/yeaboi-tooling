@@ -106,13 +106,31 @@ def _push_remote_only_branch(tmp_path: Path, env: dict[str, str], name: str) -> 
     return _git(other, "rev-parse", "HEAD", env=env)
 
 
-def _run_wt(repo: Path, name: str, env: dict[str, str], action: str = "headless") -> subprocess.CompletedProcess[str]:
+def _run_wt(
+    repo: Path,
+    name: str,
+    env: dict[str, str],
+    action: str = "headless",
+    reuse: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """`reuse` is WT_REUSE_BRANCH=1 — what `REUSE=1 make wt-one` and wt-issue.sh pass."""
     return subprocess.run(
         ["bash", "scripts/wt.sh", name, action],
         cwd=repo,
         capture_output=True,
         text=True,
-        env=env,
+        env={**env, "WT_REUSE_BRANCH": "1"} if reuse else env,
+    )
+
+
+def _is_ancestor(repo: Path, ancestor: str, descendant: str, env: dict[str, str]) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", ancestor, descendant],
+            capture_output=True,
+            env=env,
+        ).returncode
+        == 0
     )
 
 
@@ -171,29 +189,64 @@ class TestBranchBase:
 
 
 class TestExistingBranch:
-    """Provisioning must never rewrite history that already exists."""
+    """A name-based cut means a NEW branch. Reuse is opt-in, and rebases."""
 
-    def test_existing_branch_is_reused_untouched(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
+    def test_an_existing_branch_is_refused(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
+        """Silently reusing it is how one feature name ends up on five bases."""
         old = _git(repo, "rev-parse", "HEAD", env=env)
         _git(repo, "branch", "old-feat", old, env=env)
         _push_upstream_commit(tmp_path, env)
 
         result = _run_wt(repo, "old-feat", env)
 
-        assert result.returncode == 0, result.stderr
+        assert result.returncode != 0
+        assert "refusing to reuse existing branch 'old-feat'" in result.stderr
+        assert "REUSE=1" in result.stderr, "the refusal must name the way through"
+        assert not (repo / ".claude" / "worktrees" / "old-feat").exists()
         assert _git(repo, "rev-parse", "old-feat", env=env) == old
-        assert "1 commit(s) behind" in result.stdout
+
+    def test_reuse_rebases_the_existing_branch(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
+        base = _git(repo, "rev-parse", "HEAD", env=env)
+        _git(repo, "branch", "old-feat", base, env=env)
+        upstream = _push_upstream_commit(tmp_path, env)
+
+        result = _run_wt(repo, "old-feat", env, reuse=True)
+
+        assert result.returncode == 0, result.stderr
+        assert _is_ancestor(repo, upstream, "old-feat", env), "the branch is still on the old base"
+        assert "rebased 'old-feat'" in result.stdout
+
+    def test_a_conflicting_rebase_is_aborted(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
+        """Left mid-conflict, the five-repo fan-out reads as a hang. Abort instead."""
+        _git(repo, "checkout", "-qb", "clash", env=env)
+        (repo / "f2.txt").write_text("mine\n")
+        _git(repo, "add", "-A", env=env)
+        _git(repo, "commit", "-qm", "mine", env=env)
+        _git(repo, "checkout", "-q", "main", env=env)
+        tip = _git(repo, "rev-parse", "clash", env=env)
+        # _push_upstream_commit writes f2.txt too — same file, different content.
+        _push_upstream_commit(tmp_path, env)
+
+        result = _run_wt(repo, "clash", env, reuse=True)
+
+        assert result.returncode == 0, result.stderr
+        assert _git(repo, "rev-parse", "clash", env=env) == tip, "the aborted rebase moved the branch"
+        assert "hit conflicts" in result.stdout
+        assert "/sync-main" in result.stdout
+        tree = repo / ".claude" / "worktrees" / "clash"
+        assert tree.is_dir(), "the worktree is the expensive part — a failed rebase must not cost it"
+        assert not (repo / ".git" / "worktrees" / "clash" / "rebase-merge").exists()
 
 
 class TestRemoteBranch:
-    """A branch existing only on origin is continued, never shadowed by a re-cut."""
+    """Under REUSE, a branch existing only on origin is continued, never shadowed by a re-cut."""
 
     def test_remote_only_branch_is_checked_out_tracking(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
         remote_tip = _push_remote_only_branch(tmp_path, env, "feat-r")
         main_tip = _git(repo, "rev-parse", "HEAD", env=env)
         assert remote_tip != main_tip
 
-        result = _run_wt(repo, "feat-r", env)
+        result = _run_wt(repo, "feat-r", env, reuse=True)
 
         assert result.returncode == 0, result.stderr
         # The regression this path exists to prevent: a fresh same-named branch
@@ -208,16 +261,30 @@ class TestRemoteBranch:
         _git(repo, "branch", "feat-r", local_tip, env=env)
         _push_remote_only_branch(tmp_path, env, "feat-r")
 
-        result = _run_wt(repo, "feat-r", env)
+        result = _run_wt(repo, "feat-r", env, reuse=True)
 
         assert result.returncode == 0, result.stderr
         assert _git(repo, "rev-parse", "feat-r", env=env) == local_tip
+
+    def test_a_stale_remote_branch_is_rebased_with_a_force_push_warning(
+        self, tmp_path: Path, repo: Path, env: dict[str, str]
+    ) -> None:
+        """Rewriting a pushed branch is the point here — but never in silence."""
+        remote_tip = _push_remote_only_branch(tmp_path, env, "feat-r")
+        upstream = _push_upstream_commit(tmp_path, env)
+
+        result = _run_wt(repo, "feat-r", env, reuse=True)
+
+        assert result.returncode == 0, result.stderr
+        assert _is_ancestor(repo, upstream, "feat-r", env)
+        assert _git(repo, "rev-parse", "feat-r", env=env) != remote_tip
+        assert "--force-with-lease" in result.stdout
 
     def test_nested_branch_name_creates_nested_worktree(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
         """Slash-containing names (feature/foo, 123-issue-title) must nest, not fail."""
         remote_tip = _push_remote_only_branch(tmp_path, env, "feature/nested-fix")
 
-        result = _run_wt(repo, "feature/nested-fix", env)
+        result = _run_wt(repo, "feature/nested-fix", env, reuse=True)
 
         assert result.returncode == 0, result.stderr
         assert (repo / ".claude" / "worktrees" / "feature" / "nested-fix").is_dir()
@@ -260,6 +327,66 @@ class TestLocalDefaultSync:
         _run_wt(repo, "feat-a", env)
 
         assert _git(repo, "rev-parse", "main", env=env) == upstream
+
+
+class TestRefresh:
+    """Re-running on a worktree that exists is how a feature's set gets back onto main.
+
+    `make wt-new NAME=x` a second time fans this out across every repo, so the
+    only thing it may move is the base — never the provisioned tree, and never
+    somebody's uncommitted work.
+    """
+
+    def test_a_second_run_rebases_the_existing_worktree(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
+        assert _run_wt(repo, "feat-x", env).returncode == 0
+        upstream = _push_upstream_commit(tmp_path, env)
+
+        result = _run_wt(repo, "feat-x", env)
+
+        assert result.returncode == 0, result.stderr
+        assert _is_ancestor(repo, upstream, "feat-x", env), "the re-run left the worktree on the old base"
+        assert "rebased 'feat-x'" in result.stdout
+
+    def test_a_dirty_worktree_is_left_alone(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
+        """Never stash: this is provisioning, not a decision about half-finished work."""
+        assert _run_wt(repo, "feat-x", env).returncode == 0
+        tree = repo / ".claude" / "worktrees" / "feat-x"
+        before = _git(repo, "rev-parse", "feat-x", env=env)
+        (tree / "f.txt").write_text("edited in the worktree\n")
+        _push_upstream_commit(tmp_path, env)
+
+        result = _run_wt(repo, "feat-x", env)
+
+        assert result.returncode == 0, result.stderr
+        assert _git(repo, "rev-parse", "feat-x", env=env) == before
+        assert "uncommitted changes" in result.stdout
+        assert (tree / "f.txt").read_text() == "edited in the worktree\n"
+
+    def test_untracked_files_do_not_block_the_refresh(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
+        """Every worktree has build output; counting it would make the rebase dead code."""
+        assert _run_wt(repo, "feat-x", env).returncode == 0
+        (repo / ".claude" / "worktrees" / "feat-x" / "build.log").write_text("noise\n")
+        upstream = _push_upstream_commit(tmp_path, env)
+
+        result = _run_wt(repo, "feat-x", env)
+
+        assert result.returncode == 0, result.stderr
+        assert _is_ancestor(repo, upstream, "feat-x", env)
+
+    def test_the_refresh_does_not_re_provision(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
+        """A venv rebuilt under a live worktree is a surprise, not a convenience."""
+        (repo / "scripts" / "provision.sh").write_text("#!/bin/sh\ndate >> provisioned.txt\n")
+        _git(repo, "add", "-A", env=env)
+        _git(repo, "commit", "-qm", "provision", env=env)
+        _git(repo, "push", "-q", "origin", "main", env=env)
+        assert _run_wt(repo, "feat-x", env).returncode == 0
+        stamp = repo / ".claude" / "worktrees" / "feat-x" / "provisioned.txt"
+        once = stamp.read_text()
+
+        result = _run_wt(repo, "feat-x", env)
+
+        assert result.returncode == 0, result.stderr
+        assert stamp.read_text() == once, "provision.sh ran again on the refresh"
 
 
 class TestProvision:

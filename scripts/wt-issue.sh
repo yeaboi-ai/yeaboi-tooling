@@ -2,8 +2,8 @@
 # scripts/wt-issue.sh <issue-number> [open|headless] — worktree from a GitHub issue.
 #
 # Resolves the branch belonging to an ongoing GitHub issue and delegates to
-# scripts/wt.sh, which (since the remote-branch case landed there) checks the
-# branch out tracking origin/<branch>. Resolution order:
+# scripts/wt.sh with WT_REUSE_BRANCH=1, which checks the branch out tracking
+# origin/<branch> and rebases it onto origin/main. Resolution order:
 #
 #   1. Branches linked in the issue's Development section (`gh issue develop --list`)
 #   2. The head branch of an open same-repo PR that closes the issue (GraphQL
@@ -102,4 +102,7 @@ fi
 
 TITLE="$(gh issue view "$NUM" --json title --jq .title 2>/dev/null || true)"
 echo "[wt-issue] issue #$NUM${TITLE:+ ($TITLE)} → branch '$BRANCH'"
-exec env WT_REPO_DIR="$REPO_DIR" bash "$SCRIPT_DIR/wt.sh" "$BRANCH" "$ACTION"
+# WT_REUSE_BRANCH: a name-based cut in wt.sh refuses an existing branch, and every
+# branch this script resolves already exists — continuing one IS the job here. It
+# is checked out tracking origin/<branch> and rebased onto origin/main.
+exec env WT_REPO_DIR="$REPO_DIR" WT_REUSE_BRANCH=1 bash "$SCRIPT_DIR/wt.sh" "$BRANCH" "$ACTION"

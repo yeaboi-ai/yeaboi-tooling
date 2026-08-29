@@ -107,6 +107,11 @@ as one multi-root VS Code window (`<workspace>/.worktrees/x.code-workspace`) run
 session with `--add-dir` over every worktree. `REPOS="yeaboi frontend"` narrows it; `HEADLESS=1`
 skips the window; `make wt-one NAME=x` is the single-repo cut.
 
+Running it again is the refresh: every repo's worktree is rebased onto freshly fetched `origin/main`,
+so a set that has drifted is brought back with the command that cut it. Dirty worktrees are skipped
+and conflicting rebases are aborted, both with a note — `/sync-main` in that worktree is the human
+path.
+
 Per-repo cuts inside a set go through `wt-headless`, never `wt-new` — `wt-new` is the set command, so
 that would recurse, and `wt-headless` is the one worktree target every repo already has at whatever
 `.tooling` pin it is on, so a set can be cut before the siblings bump. Headless also means wt.sh
@@ -158,9 +163,12 @@ Keep it short. Anything longer than a page is a skill, not a note.
 ## Worktrees
 
 `<main checkout>/.claude/worktrees/<name>` in every repo, cut from freshly fetched `origin/main`.
-`wt.sh` copies `.env` from the main checkout and then runs the repo's own `scripts/provision.sh` —
-that is the seam where a Python repo makes a venv and installs pre-commit, a Node repo runs `npm ci`,
-and a static site does nothing at all.
+Always a **new** branch: an existing `<name>`, local or on `origin`, is refused unless `REUSE=1` says
+to continue it, and a reused branch is rebased onto `origin/main` on the way in. `wt.sh` copies
+`.env` from the main checkout and then runs the repo's own `scripts/provision.sh` — that is the seam
+where a Python repo makes a venv and installs pre-commit, a Node repo runs `npm ci`, and a static
+site does nothing at all. Re-running on an existing worktree only moves the base: it rebases, and
+never re-provisions or rewrites `.env`.
 
 The scripts resolve the project from `$PWD` (or `WT_REPO_DIR`), never from their own path: they live
 inside `.tooling/`, which is a different git repository, and resolving from `$BASH_SOURCE` would cut

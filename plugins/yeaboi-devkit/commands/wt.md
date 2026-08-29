@@ -22,10 +22,17 @@ or when the work genuinely lives in one repo.
   `--add-dir` access to every worktree. Add `REPOS="yeaboi frontend"` to narrow it — repos are named
   as `workspace.toml` names them (`yeaboi`, `frontend`, `desktop`, `site`, `tooling`) or by directory.
   Add `HEADLESS=1` when background agents will drive them instead of a human-attended window.
-  If a branch already exists locally the script reuses it as-is; if it exists only on `origin` it is
-  checked out tracking the remote branch (not re-cut from main). Either way each repo reports how far
-  behind main it is — rebase with `/sync-main` inside that worktree. A repo that is not cloned is
-  skipped with a note (`make workspace-setup` clones it).
+  A cut always means a **new** branch off `origin/main`: if `<name>` already exists, locally or on
+  `origin`, that repo refuses rather than hand the worktree somebody else's base — which is how one
+  feature name ends up on a different base in each repo. Add `REUSE=1` to continue existing branches
+  instead; they are checked out (tracking `origin/<name>` when that is where they live) and rebased
+  onto `origin/main`.
+  **Re-running is the refresh.** `make wt-new NAME=<name>` a second time fetches and rebases every
+  repo's worktree onto `origin/main`, so one command brings the whole set back onto the latest base.
+  A worktree with uncommitted changes is left alone with a note (nothing is ever stashed), and a
+  rebase that conflicts is aborted — the worktree stays usable on its old base and `/sync-main`
+  inside it is where you resolve it. A repo that is not cloned is skipped with a note
+  (`make workspace-setup` clones it).
   Ship upstream first: the downstream PR is what carries the new pin.
 - `one <name>` — run `make wt-one NAME=<name>`: the same cut in **this repo only**, opening that one
   folder in its own VS Code window. What `new` used to mean.

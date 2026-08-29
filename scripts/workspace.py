@@ -501,11 +501,14 @@ def cmd_wt_set(args: argparse.Namespace) -> int:
 
     print(f"[workspace] cutting '{args.name}' in {len(present)} repo(s), in parallel…")
     sys.stdout.flush()
+    # Appended, never inserted: the per-repo argv is read positionally elsewhere
+    # (the repo dir is [2], the target [3]), and REUSE is the rare case.
+    extra = ["REUSE=1"] if args.reuse else []
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(present)) as pool:
         pending = {
             pool.submit(
                 run_capture,
-                ["make", "-C", str(root / repo.dir), "wt-headless", f"NAME={args.name}"],
+                ["make", "-C", str(root / repo.dir), "wt-headless", f"NAME={args.name}", *extra],
             ): repo
             for repo in present
         }
@@ -609,6 +612,12 @@ def main(argv: list[str] | None = None) -> int:
     cut.add_argument("name")
     cut.add_argument("--repos", help='space-separated, e.g. "yeaboi frontend" (default: every repo)')
     cut.add_argument("--headless", action="store_true", help="cut the worktrees, open no editor window")
+    cut.add_argument(
+        "--reuse",
+        action="store_true",
+        help="continue branches of this name where they already exist, rebased onto origin/main "
+        "(without it an existing branch is refused, because a cut means a fresh one)",
+    )
 
     sub.add_parser("wt-sets", help="which worktree names exist in which repos")
 

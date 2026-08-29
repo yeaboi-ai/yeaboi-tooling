@@ -19,15 +19,23 @@
 # (origin/main) rather than from whatever the main checkout happens to be sitting
 # on — otherwise a stale main silently hands every new feature branch an old
 # base, and the first `/sync-main` turns into a surprise rebase. Each fallback
-# (no origin, failed fetch, unresolvable default branch, pre-existing branch)
-# prints why it took a local base instead.
+# (no origin, failed fetch, unresolvable default branch) prints why it took a
+# local base instead.
 #
-# Branch resolution order: an existing LOCAL branch is reused as-is; else an
-# existing REMOTE branch (origin/<name>) is checked out tracking its remote
-# counterpart — so `make wt-one NAME=<teammate-branch>` continues that branch
-# instead of silently re-cutting a same-named one from origin/main; else a new
-# branch is cut from origin/main. wt-issue.sh resolves <name> from a GitHub
-# issue's linked branch / closing PR and delegates here.
+# Branch resolution: a name-based cut NEVER reuses an existing branch. If <name>
+# already exists locally or on origin, this refuses rather than silently handing
+# the worktree somebody else's base — one feature name is one fresh branch, in
+# every repo, off the same origin/main. Set WT_REUSE_BRANCH=1 (`REUSE=1` through
+# make) to continue an existing branch instead: a local one is checked out as-is,
+# a remote-only one tracking origin/<name>, and either way it is rebased onto
+# origin/main. wt-issue.sh always passes it, because resolving an issue's existing
+# branch and continuing it is that script's whole job.
+#
+# Re-running on a worktree that ALREADY exists is the refresh: fetch, then rebase
+# that worktree onto origin/main. `make wt-new NAME=x` a second time is how one
+# feature's five worktrees are brought back onto the latest base. A dirty worktree
+# is skipped (never stashed) and a conflicting rebase is aborted, leaving the
+# worktree usable on its old base with a pointer to /sync-main.
 #
 # Provisioning per worktree: copy the main checkout's .env, then run the repo's
 # own `scripts/provision.sh` if it has one — that is the seam where a Python
@@ -43,6 +51,10 @@ NAME="${1:?usage: wt.sh <name> [open|headless|rm]}"
 ACTION="${2:-create}"
 
 REPO_DIR="${WT_REPO_DIR:-$PWD}"
+
+# The only thing that unlocks checking out a pre-existing branch. Empty (the
+# default) means a name-based cut, which refuses one. wt-issue.sh sets it.
+REUSE_BRANCH="${WT_REUSE_BRANCH:-}"
 
 # Self-heal: a stray `core.bare=true` (left by an interrupted "clean checkout of
 # main" from a parallel session) makes every work-tree git command fail with
@@ -156,14 +168,48 @@ sync_local_default() {
   fi
 }
 
-report_behind() {
-  # An existing branch keeps its own history — rebasing it here could conflict
-  # or rewrite pushed commits, so only report the gap and let /sync-main do it.
+# Bring the worktree's branch onto $BASE_REF. Runs in $TARGET, never in $ROOT:
+# the branch is checked out in the worktree, and git refuses to rebase a branch
+# that is checked out somewhere else. Silent when there is nothing to do, so the
+# common freshly-cut case adds no line to the five-repo fan-out.
+rebase_onto_base() {
   [ -n "$BASE_REF" ] || return 0
   local behind
-  behind="$(git -C "$ROOT" rev-list --count "$NAME..$BASE_REF" 2>/dev/null || echo 0)"
-  if [ "$behind" != "0" ]; then
-    echo "[wt] note: existing branch '$NAME' is $behind commit(s) behind $BASE_REF — run /sync-main in the worktree"
+  behind="$(git -C "$TARGET" rev-list --count "HEAD..$BASE_REF" 2>/dev/null || echo 0)"
+  [ "$behind" != "0" ] || return 0
+
+  # Never touch uncommitted work — this is provisioning, not a decision about
+  # somebody's half-finished change. -uno for the same reason sync_local_default
+  # uses it: every worktree has untracked build output, and counting it would
+  # make this branch dead code.
+  if [ -n "$(git -C "$TARGET" status --porcelain -uno)" ]; then
+    echo "[wt] note: '$NAME' is $behind commit(s) behind $BASE_REF, but the worktree has uncommitted changes — left alone (commit, then /sync-main)"
+    return 0
+  fi
+  # A rebase interrupted by an earlier run (or by a human mid-conflict): finishing
+  # or aborting it is theirs to decide.
+  if [ -d "$(git -C "$TARGET" rev-parse --git-path rebase-merge)" ] ||
+     [ -d "$(git -C "$TARGET" rev-parse --git-path rebase-apply)" ]; then
+    echo "[wt] note: a rebase is already in progress in this worktree — left alone"
+    return 0
+  fi
+
+  # GIT_EDITOR/GIT_SEQUENCE_EDITOR: like git_offline above, this script is an
+  # entry point for unattended fan-out, where anything that opens an editor hangs
+  # the orchestrating agent forever.
+  if GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true git -C "$TARGET" rebase "$BASE_REF" >/dev/null 2>&1; then
+    echo "[wt] rebased '$NAME' onto $BASE_REF ($behind commit(s))"
+    if git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/$NAME"; then
+      echo "[wt] note: '$NAME' also exists on origin and its history was just rewritten — push with --force-with-lease"
+    fi
+  else
+    # Abort rather than leave the tree mid-conflict: the workspace fan-out buffers
+    # each repo's output until it exits, so a rebase stopped on a conflict reads as
+    # a hang. The worktree is still usable on its old base; /sync-main is where a
+    # human resolves it, with the conflict playbook that a script cannot apply.
+    git -C "$TARGET" rebase --abort >/dev/null 2>&1 || true
+    echo "[wt] note: rebase of '$NAME' onto $BASE_REF hit conflicts — aborted, worktree left on its old base"
+    echo "[wt]       resolve it in the worktree with /sync-main ($behind commit(s) behind)"
   fi
 }
 
@@ -175,16 +221,27 @@ if [ ! -d "$TARGET" ]; then
   mkdir -p "$(dirname "$TARGET")"
   resolve_base
   sync_local_default
-  # Reuse a local branch; else continue an existing remote branch; else cut new.
-  if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$NAME"; then
+  # With WT_REUSE_BRANCH: continue a local branch, else an existing remote one.
+  # Without it (the name-based cut): refuse either, and cut fresh from the base.
+  if [ -n "$REUSE_BRANCH" ] && git -C "$ROOT" show-ref --verify --quiet "refs/heads/$NAME"; then
     git -C "$ROOT" worktree add "$TARGET" "$NAME"
-    report_behind
-  elif git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/$NAME"; then
+    echo "[wt] continuing existing local branch '$NAME'"
+    rebase_onto_base
+  elif [ -n "$REUSE_BRANCH" ] && git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/$NAME"; then
     # --track (unlike the --no-track below): the base IS this branch's remote
     # counterpart, so a bare `git push` in the worktree should aim at it.
     git -C "$ROOT" worktree add --track -b "$NAME" "$TARGET" "origin/$NAME"
     echo "[wt] checked out existing remote branch origin/$NAME (tracking)"
-    report_behind
+    rebase_onto_base
+  elif git -C "$ROOT" show-ref --verify --quiet "refs/heads/$NAME" ||
+       git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/$NAME"; then
+    # Silently reusing it is how one feature name ends up on five different bases:
+    # cut fresh in the repos that lack the branch, inheriting an old base in the
+    # rest. Say so instead, and name both ways out.
+    echo "[wt] refusing to reuse existing branch '$NAME' — a name-based cut always starts at origin/$DEFAULT_BRANCH." >&2
+    echo "     continue it:  REUSE=1 make wt-one NAME=$NAME   (checked out, then rebased onto origin/$DEFAULT_BRANCH)" >&2
+    echo "     or drop it:   make wt-one-rm NAME=$NAME" >&2
+    exit 1
   elif [ -n "$BASE_REF" ]; then
     # --no-track: branching off a remote-tracking ref would otherwise set the new
     # branch's upstream to origin/main, so a bare `git push` in the worktree aims
@@ -252,6 +309,14 @@ EOF
 }
 EOF
   fi
+else
+  # The refresh. Re-running the same command is how a feature's worktrees are
+  # brought back onto the latest base — `make wt-new NAME=x` a second time does it
+  # for all five at once. Only the base moves: provisioning, .env and .vscode/
+  # belong to the creation above and must not be rewritten under a live worktree.
+  resolve_base
+  sync_local_default
+  rebase_onto_base
 fi
 
 echo "[wt] worktree ready: $TARGET"
