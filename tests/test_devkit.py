@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,81 @@ class TestHooks:
     def test_the_stop_hook_cannot_loop(self):
         assert "stop_hook_active" in _read(PLUGIN / "scripts" / "verify-stop.sh"), (
             "without the stop_hook_active guard a failing verification blocks forever"
+        )
+
+
+class TestTheStashGuard:
+    """The PreToolUse hook that keeps one worktree off another's stashed work.
+
+    Worktrees share a .git and therefore one stash stack; `git stash pop` takes
+    the top entry — routinely somebody else's — and deletes it. The guard has to
+    block that spelling while leaving the safe ones, and every wrapper it names
+    has to exist.
+    """
+
+    GUARD = PLUGIN / "scripts" / "guard-stash.sh"
+
+    def _verdict(self, command: str, cwd: Path | None = None) -> int:
+        payload = json.dumps({"tool_input": {"command": command}})
+        return subprocess.run(
+            ["bash", str(self.GUARD)],
+            input=payload,
+            capture_output=True,
+            text=True,
+            cwd=cwd or ROOT,
+        ).returncode
+
+    def test_it_is_registered_as_a_pretooluse_bash_hook(self):
+        hooks = json.loads(_read(PLUGIN / "hooks" / "hooks.json"))["hooks"]
+        assert "PreToolUse" in hooks, "the stash guard is not wired to any event"
+        assert any(m.get("matcher") == "Bash" for m in hooks["PreToolUse"])
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git stash pop",
+            "git stash",
+            "cd sub && git stash pop",
+            "git stash apply stash@{0}",
+            "git stash drop",
+            "git stash clear",
+        ],
+    )
+    def test_it_blocks_the_spellings_that_can_take_another_worktree_s_work(self, command: str):
+        # Exit 2 is what returns stderr to Claude, turning this into a redirect.
+        assert self._verdict(command) == 2, f"{command!r} was allowed"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git stash list",
+            "git stash show",
+            'git stash push -u -m "wt:feature"',
+            "git stash apply 8f3a91c2b4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9",
+            "git status",
+            "ls -la",
+        ],
+    )
+    def test_it_allows_the_safe_spellings(self, command: str):
+        assert self._verdict(command) == 0, f"{command!r} was blocked"
+
+    def test_it_is_inert_in_a_repo_with_one_working_tree(self, tmp_path: Path):
+        """This plugin ships to repos that never use worktrees; the hazard is theirs to not have."""
+        subprocess.run(["git", "init", "-q", str(tmp_path / "solo")], check=True)
+        assert self._verdict("git stash pop", cwd=tmp_path / "solo") == 0
+
+    def test_the_message_names_wrappers_that_exist(self):
+        out = subprocess.run(
+            ["bash", str(self.GUARD)],
+            input=json.dumps({"tool_input": {"command": "git stash pop"}}),
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        )
+        named = set(re.findall(r"make ([a-z][a-z-]*)", out.stderr))
+        assert named, "the block message points nowhere"
+        assert named <= provided_targets() | required_targets(), (
+            f"the guard points at {named - provided_targets() - required_targets()}, which no repo provides"
         )
 
 

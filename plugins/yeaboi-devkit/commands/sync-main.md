@@ -11,12 +11,13 @@ provisioning script must not make.
 
 1. Run `git branch --show-current`. If on `main`, just run `git pull --ff-only` and stop.
 2. `git fetch origin`. Report the drift: `git rev-list --count HEAD..origin/main`.
-3. If the working tree is dirty, stash first (`git stash push -u -m "sync-main autostash"`) and
-   remember to pop at the end. Use the message — the stash stack is shared with every other worktree
-   of this repo, and a bare `git stash pop` can take somebody else's work.
+3. If the working tree is dirty, run `make stash` first and `make unstash` at the end. The stash
+   stack is shared with every other worktree of this repo, so a bare `git stash pop` can take —
+   and delete — somebody else's work; `make stash` tags the entry and `make unstash` restores this
+   worktree's own by sha. A bare pop is blocked by the devkit's PreToolUse guard.
 4. `git rebase origin/main` — **`origin/main`, never local `main`**, which in a worktree is routinely
    several commits behind and would rebase you onto a base that no longer exists upstream.
-5. Resolve conflicts with the playbook below. Pop the stash if one was created, resolving the same way.
+5. Resolve conflicts with the playbook below. `make unstash` if one was created, resolving the same way.
 6. Re-verify on the new base: `make test-scoped` + `make lint`. If the rebase touched **any generated
    file**, run `make ship-gate` instead — a scoped test run cannot see a stale bundle, a stale
    fixture, or a package that lost a generated tree.

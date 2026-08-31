@@ -31,6 +31,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# Sibling script in this same directory, not an installed package — this file is
+# run by path (`python3 .tooling/scripts/workspace.py`), so it is not importable
+# any other way.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import wt_slots  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "workspace.toml"
 
@@ -498,6 +504,15 @@ def cmd_wt_set(args: argparse.Namespace) -> int:
     # Not being cloned is a fact about the machine when the whole workspace was
     # implied, and a mistake when the repo was named out loud.
     failed = [] if everywhere else [repo.name for repo in missing]
+
+    # Claim the port/state slot once, here, rather than letting five parallel
+    # wt.sh runs each race for it — they must all agree on one number, because
+    # one feature's five worktrees are developed together.
+    try:
+        slot = wt_slots.allocate(args.name)
+        print(f"[workspace] '{args.name}' is slot {slot} — its own ports and ~/.yeaboi in every repo")
+    except Exception as exc:  # a shared machine resource; never block the cut on it
+        print(f"[workspace] note: could not assign a slot ({exc}) — worktrees will share ports")
 
     print(f"[workspace] cutting '{args.name}' in {len(present)} repo(s), in parallel…")
     sys.stdout.flush()

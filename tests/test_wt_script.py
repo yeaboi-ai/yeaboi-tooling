@@ -56,6 +56,10 @@ def env(tmp_path: Path) -> dict[str, str]:
         "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@example.com",
         "GIT_TERMINAL_PROMPT": "0",
+        # Same reason the GIT_* vars are dropped: without this the script
+        # allocates out of the developer's REAL slot registry and every run
+        # burns a slot that no worktree owns.
+        "YEABOI_WT_SLOTS_FILE": str(tmp_path / "slots.json"),
     }
 
 
@@ -73,6 +77,9 @@ def repo(tmp_path: Path, env: dict[str, str]) -> Path:
     scripts = work / "scripts"
     scripts.mkdir()
     shutil.copy(WT_SH, scripts / "wt.sh")
+    # wt.sh resolves its siblings from its own directory, so the slot allocator
+    # has to travel with it.
+    shutil.copy(WT_SH.parent / "wt_slots.py", scripts / "wt_slots.py")
     (work / "f.txt").write_text("one\n")
     _git(work, "add", "-A", env=env)
     _git(work, "commit", "-qm", "one", env=env)
@@ -387,6 +394,73 @@ class TestRefresh:
 
         assert result.returncode == 0, result.stderr
         assert stamp.read_text() == once, "provision.sh ran again on the refresh"
+
+
+class TestPortBlock:
+    """Every worktree gets its own ports and data home, or a note saying why not."""
+
+    def test_a_new_worktree_gets_a_block(self, repo: Path, env: dict[str, str]) -> None:
+        assert _run_wt(repo, "feat-x", env).returncode == 0
+        body = (repo / ".claude" / "worktrees" / "feat-x" / ".worktree.env").read_text()
+        assert "export RETRO_PORT=" in body
+        assert "export YEABOI_HOME=" in body
+
+    def test_the_block_is_sourceable_by_sh(self, repo: Path, env: dict[str, str]) -> None:
+        """`npm run dev` is not started by make and has to read the same file."""
+        assert _run_wt(repo, "feat-x", env).returncode == 0
+        tree = repo / ".claude" / "worktrees" / "feat-x"
+        out = subprocess.run(
+            ["sh", "-c", '. ./.worktree.env; echo "$RETRO_PORT"'],
+            cwd=tree,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert out.stdout.strip().isdigit()
+
+    def test_two_worktrees_get_different_ports(self, repo: Path, env: dict[str, str]) -> None:
+        ports = []
+        for name in ("feat-a", "feat-b"):
+            assert _run_wt(repo, name, env).returncode == 0
+            body = (repo / ".claude" / "worktrees" / name / ".worktree.env").read_text()
+            ports.append(next(ln for ln in body.splitlines() if ln.startswith("export RETRO_PORT=")))
+        assert ports[0] != ports[1], ports
+
+    def test_the_main_checkout_has_no_block(self, repo: Path, env: dict[str, str]) -> None:
+        """No file means every downstream default is the port it has always been."""
+        assert _run_wt(repo, "feat-x", env).returncode == 0
+        assert not (repo / ".worktree.env").exists()
+
+    def test_rm_frees_the_slot_for_the_next_worktree(self, repo: Path, env: dict[str, str]) -> None:
+        assert _run_wt(repo, "feat-a", env).returncode == 0
+        first = (repo / ".claude" / "worktrees" / "feat-a" / ".worktree.env").read_text()
+        assert _run_wt(repo, "feat-a", env, action="rm").returncode == 0
+        assert _run_wt(repo, "feat-b", env).returncode == 0
+        assert (repo / ".claude" / "worktrees" / "feat-b" / ".worktree.env").read_text().replace(
+            "feat-b", "feat-a"
+        ) == first
+
+    def test_repair_gives_an_existing_worktree_a_block(self, repo: Path, env: dict[str, str]) -> None:
+        """The retrofit path for worktrees cut before slots existed."""
+        assert _run_wt(repo, "feat-x", env).returncode == 0
+        block = repo / ".claude" / "worktrees" / "feat-x" / ".worktree.env"
+        block.unlink()
+
+        assert _run_wt(repo, "feat-x", env, action="repair").returncode == 0
+
+        assert "export RETRO_PORT=" in block.read_text()
+
+    def test_repair_refuses_a_worktree_that_is_not_there(self, repo: Path, env: dict[str, str]) -> None:
+        assert _run_wt(repo, "nope", env, action="repair").returncode != 0
+
+    def test_a_failed_allocation_is_a_note_not_a_failure(self, repo: Path, env: dict[str, str]) -> None:
+        """A worktree without a block is degraded, not broken — same as provisioning."""
+        env = {**env, "YEABOI_WT_SLOTS_FILE": "/nonexistent-dir/nope/slots.json"}
+
+        result = _run_wt(repo, "feat-x", env)
+
+        assert result.returncode == 0, result.stderr
+        assert (repo / ".claude" / "worktrees" / "feat-x").is_dir()
 
 
 class TestProvision:

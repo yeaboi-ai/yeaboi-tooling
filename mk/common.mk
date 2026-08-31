@@ -11,6 +11,23 @@
 TOOLING ?= .tooling
 TOOLING_REPO ?= https://github.com/yeaboi-ai/yeaboi-tooling.git
 
+# --- this worktree's port block ----------------------------------------------
+# wt.sh writes .worktree.env into every worktree it cuts (scripts/wt_slots.py).
+# Its lines are `export NAME=value`, which GNU make reads as an export directive
+# and sh reads as an export — so the list of what gets exported lives in the
+# generated file, not here, and `npm run dev` can source the same file.
+#
+# `-include` (leading dash) so the main checkout, which has no such file, parses
+# in silence and keeps every downstream default. $(CURDIR) rather than a bare
+# name so `make -C <repo>` reads that repo's block, not the caller's.
+#
+# Precedence: a command-line override still wins, so `make dev-board RETRO_PORT=5999`
+# does what it says.
+-include $(CURDIR)/.worktree.env
+
+# This worktree's name, for anything that must not collide with a sibling.
+WT_SELF = $(if $(YEABOI_WT_NAME),$(YEABOI_WT_NAME),$(notdir $(CURDIR)))
+
 # Editor CLI used by every target that opens a window. Override for VS Code
 # forks (e.g. `CODE=cursor make wt-new NAME=my-feature`).
 CODE ?= code
@@ -42,7 +59,8 @@ include $(TOOLING)/mk/clip.mk
 # surface, and a GIF nobody can re-record goes stale the first time the UI moves.
 TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate demo
 
-.PHONY: wt-new wt-rm wt-set wt-set-rm wt-sets \
+.PHONY: wt-repair stash stash-list unstash \
+	wt-new wt-rm wt-set wt-set-rm wt-sets \
         wt-one wt-one-rm wt-open wt-headless wt-issue wt-list wt-rm-all \
         workspace-setup workspace-status workspace-env \
         tooling-sync tooling-bump tooling-check contracts-sync contracts-check
@@ -118,12 +136,40 @@ wt-issue: ## Create worktree in THIS repo from the branch of GitHub issue N; HEA
 	@test -n "$(ISSUE)" || { echo "usage: make wt-issue ISSUE=<number> [HEADLESS=1]"; exit 1; }
 	$(WT_ENV) bash $(TOOLING)/scripts/wt-issue.sh "$(ISSUE)" $(if $(filter-out 0,$(HEADLESS)),headless,open)
 
+wt-repair: ## Give an EXISTING worktree its own ports + YEABOI_HOME (for trees cut before slots)
+	$(need-name)
+	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" repair
+
 wt-list: ## List THIS repo's worktrees (branch, clean/dirty, path)
 	@bash $(TOOLING)/scripts/wt-list.sh
 
 wt-one-rm: ## Remove THIS repo's worktree NAME (dir + branch)
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" rm
+
+# --- the shared stash stack --------------------------------------------------
+# Every worktree shares one .git, so they share one stash stack: a bare
+# `git stash pop` in one session can restore — and then drop — work another
+# session pushed. These tag each entry with the worktree that made it, never
+# pop, and only ever touch this worktree's own entries.
+
+STASH_TAG = wt:$(WT_SELF)
+
+stash: ## Set this worktree's changes aside (tagged, on the stack every worktree shares)
+	@git stash push -u -m "$(STASH_TAG): $$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+	  && echo "[stash] saved as '$(STASH_TAG)'. Restore with: make unstash"
+
+stash-list: ## List only THIS worktree's stash entries
+	@git stash list --format='%gd  %gs' | grep -F "$(STASH_TAG):" \
+	  || echo "[stash] nothing stashed by '$(WT_SELF)'"
+
+unstash: ## Restore this worktree's most recent stash entry (apply + drop, never pop)
+	@sha=$$(git stash list --format='%H %gs' | grep -F "$(STASH_TAG):" | head -1 | cut -d' ' -f1); \
+	  if [ -z "$$sha" ]; then echo "[stash] nothing stashed by '$(WT_SELF)'"; exit 1; fi; \
+	  git stash apply "$$sha" || exit 1; \
+	  ref=$$(git stash list --format='%gd %H' | grep " $$sha" | head -1 | cut -d' ' -f1); \
+	  if [ -n "$$ref" ]; then git stash drop "$$ref" >/dev/null; fi; \
+	  echo "[stash] restored and dropped '$(STASH_TAG)'"
 
 wt-rm-all: ## Remove ALL worktrees under THIS repo's .claude/worktrees/ (prompts to confirm)
 	@read -r -p "Remove ALL .claude/worktrees/* worktrees and their branches? [y/N] " ans; \
