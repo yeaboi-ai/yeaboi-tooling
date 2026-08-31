@@ -21,6 +21,12 @@ sys.path.insert(0, str(SCRIPTS))
 
 import wt_slots  # noqa: E402
 
+# Run in a subprocess by TestConcurrency: an out-of-process racer is the only
+# honest test of a file lock.
+_ALLOCATE_ONE = (
+    f"import sys; sys.path.insert(0, {str(SCRIPTS)!r}); import wt_slots; print(wt_slots.allocate(sys.argv[1]))"
+)
+
 
 @pytest.fixture(autouse=True)
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -63,13 +69,9 @@ class TestConcurrency:
     """`make wt-new` fans out across five repos in a thread pool."""
 
     def _race(self, registry: Path, names: list[str]) -> list[str]:
-        code = (
-            f"import sys; sys.path.insert(0, {str(SCRIPTS)!r}); "
-            "import wt_slots; print(wt_slots.allocate(sys.argv[1]))"
-        )
         procs = [
             subprocess.Popen(
-                [sys.executable, "-c", code, name],
+                [sys.executable, "-c", _ALLOCATE_ONE, name],
                 stdout=subprocess.PIPE,
                 text=True,
                 env={**os.environ, "YEABOI_WT_SLOTS_FILE": str(registry)},
