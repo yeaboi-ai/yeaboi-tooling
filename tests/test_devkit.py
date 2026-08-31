@@ -8,6 +8,7 @@ defines simply does nothing useful, in four repos at once.
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 import subprocess
@@ -101,14 +102,32 @@ class TestTheStashGuard:
 
     GUARD = PLUGIN / "scripts" / "guard-stash.sh"
 
-    def _verdict(self, command: str, cwd: Path | None = None) -> int:
+    @pytest.fixture
+    def shared_stack(self, tmp_path: Path) -> Path:
+        """A repo with two worktrees — the only shape where the hazard exists.
+
+        Not this checkout: CI clones a single working tree, so a guard that is
+        (correctly) inert there would make every block case pass vacuously.
+        """
+        repo = tmp_path / "repo"
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"), "GIT_CONFIG_SYSTEM": os.devnull}
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+        (repo / "f.txt").write_text("one\n")
+        for args in (["add", "-A"], ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "one"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, env=env)
+        subprocess.run(
+            ["git", "-C", str(repo), "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "wt"], check=True, env=env
+        )
+        return repo
+
+    def _verdict(self, command: str, cwd: Path) -> int:
         payload = json.dumps({"tool_input": {"command": command}})
         return subprocess.run(
             ["bash", str(self.GUARD)],
             input=payload,
             capture_output=True,
             text=True,
-            cwd=cwd or ROOT,
+            cwd=cwd,
         ).returncode
 
     def test_it_is_registered_as_a_pretooluse_bash_hook(self):
@@ -127,9 +146,9 @@ class TestTheStashGuard:
             "git stash clear",
         ],
     )
-    def test_it_blocks_the_spellings_that_can_take_another_worktree_s_work(self, command: str):
+    def test_it_blocks_the_spellings_that_can_take_another_worktree_s_work(self, command: str, shared_stack: Path):
         # Exit 2 is what returns stderr to Claude, turning this into a redirect.
-        assert self._verdict(command) == 2, f"{command!r} was allowed"
+        assert self._verdict(command, shared_stack) == 2, f"{command!r} was allowed"
 
     @pytest.mark.parametrize(
         "command",
@@ -142,21 +161,21 @@ class TestTheStashGuard:
             "ls -la",
         ],
     )
-    def test_it_allows_the_safe_spellings(self, command: str):
-        assert self._verdict(command) == 0, f"{command!r} was blocked"
+    def test_it_allows_the_safe_spellings(self, command: str, shared_stack: Path):
+        assert self._verdict(command, shared_stack) == 0, f"{command!r} was blocked"
 
     def test_it_is_inert_in_a_repo_with_one_working_tree(self, tmp_path: Path):
         """This plugin ships to repos that never use worktrees; the hazard is theirs to not have."""
         subprocess.run(["git", "init", "-q", str(tmp_path / "solo")], check=True)
-        assert self._verdict("git stash pop", cwd=tmp_path / "solo") == 0
+        assert self._verdict("git stash pop", tmp_path / "solo") == 0
 
-    def test_the_message_names_wrappers_that_exist(self):
+    def test_the_message_names_wrappers_that_exist(self, shared_stack: Path):
         out = subprocess.run(
             ["bash", str(self.GUARD)],
             input=json.dumps({"tool_input": {"command": "git stash pop"}}),
             capture_output=True,
             text=True,
-            cwd=ROOT,
+            cwd=shared_stack,
         )
         named = set(re.findall(r"make ([a-z][a-z-]*)", out.stderr))
         assert named, "the block message points nowhere"
