@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wt.sh <name> [open|headless|rm] — git-worktree lifecycle for parallel Claude sessions.
+# wt.sh <name> [open|headless|rm|repair] — git-worktree lifecycle for parallel Claude sessions.
 #
 # This is the SINGLE-REPO half. `make wt-new` cuts one feature across the whole
 # workspace and drives this script once per repo (headless) through
@@ -47,8 +47,11 @@
 
 set -euo pipefail
 
-NAME="${1:?usage: wt.sh <name> [open|headless|rm]}"
+NAME="${1:?usage: wt.sh <name> [open|headless|rm|repair]}"
 ACTION="${2:-create}"
+
+# Sibling scripts only. The *repo* still comes from WT_REPO_DIR/$PWD — see above.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 REPO_DIR="${WT_REPO_DIR:-$PWD}"
 
@@ -79,12 +82,39 @@ fi
 
 TARGET="$ROOT/.claude/worktrees/$NAME"
 
+# --- .worktree.env: this worktree's private ports and data home ---------------
+# Worktrees share a machine, so they share every fixed port and everything under
+# ~/.yeaboi. A slot turns that into a per-worktree block; mk/common.mk includes
+# the file, so every recipe inherits it. Credentials stay in ~/.yeaboi/.env,
+# which is deliberately outside YEABOI_HOME.
+write_worktree_env() {
+  if ! python3 "$SCRIPT_DIR/wt_slots.py" env "$NAME" > "$TARGET/.worktree.env"; then
+    rm -f "$TARGET/.worktree.env"
+    echo "[wt] note: could not assign a worktree slot — this tree shares ports and ~/.yeaboi with the others" >&2
+    return 0
+  fi
+  echo "[wt] slot $(python3 "$SCRIPT_DIR/wt_slots.py" get "$NAME") — private ports + YEABOI_HOME in .worktree.env"
+}
+
 if [ "$ACTION" = "rm" ]; then
+  python3 "$SCRIPT_DIR/wt_slots.py" release "$NAME" 2>/dev/null || true
   git -C "$ROOT" worktree remove --force "$TARGET" 2>/dev/null || true
   rm -rf "$TARGET"
   git -C "$ROOT" worktree prune
   git -C "$ROOT" branch -D "$NAME" 2>/dev/null || true
   echo "[wt] removed worktree '$NAME' (dir + branch)"
+  exit 0
+fi
+
+# Retrofit for worktrees cut before slots existed. Deliberately narrow: the
+# refresh path below already refuses to rewrite .env, .vscode/ or provisioning
+# under a live worktree, and this must not either.
+if [ "$ACTION" = "repair" ]; then
+  if [ ! -d "$TARGET" ]; then
+    echo "[wt] no worktree '$NAME' to repair at $TARGET" >&2
+    exit 1
+  fi
+  write_worktree_env
   exit 0
 fi
 
@@ -259,6 +289,8 @@ if [ ! -d "$TARGET" ]; then
   elif [ -f "$ROOT/.env.example" ]; then
     echo "[wt] note: no $ROOT/.env — run \`make env\` in the main checkout, then re-create this worktree"
   fi
+
+  write_worktree_env
 
   # --- provisioning: whatever this repo's toolchain needs ----------------------
   # The seam between the shared script and the repo: a Python repo builds a uv
