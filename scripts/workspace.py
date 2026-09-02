@@ -364,10 +364,25 @@ def cmd_matrix(args: argparse.Namespace) -> int:
 
 
 def worktrees(path: Path) -> list[str]:
+    """Every worktree name under this repo, nested ones included.
+
+    A branch-shaped name like ``desktop/tips-ui`` lands on disk as nested
+    directories, so a single-level scan sees only the ``desktop`` parent — which
+    holds no ``.git`` and is skipped, making the worktree invisible to wt-sets
+    and wt-rm. Names come back relative to the worktrees root, so they match the
+    NAME the wt- targets take. Each worktree carries a pinned ``.tooling``
+    clone; that is a checkout, not a worktree of this repo, and is never a name.
+    """
     home = path / ".claude" / "worktrees"
     if not home.is_dir():
         return []
-    return sorted(p.name for p in home.iterdir() if (p / ".git").exists())
+    found = set()
+    for git in home.rglob(".git"):
+        name = git.parent.relative_to(home)
+        if TOOLING_DIR in name.parts:
+            continue
+        found.add(name.as_posix())
+    return sorted(found)
 
 
 # --- one feature, every repo -------------------------------------------------
@@ -384,6 +399,7 @@ def worktrees(path: Path) -> list[str]:
 # multi-root window therefore has exactly one `folderOpen` task, and so exactly
 # one claude session — not one per root, five of them racing for the terminal.
 
+TOOLING_DIR = ".tooling"
 WT_SETS_DIR = ".worktrees"
 
 
@@ -580,6 +596,58 @@ def cmd_wt_sets(args: argparse.Namespace) -> int:
     return 0
 
 
+def unshipped(path: Path) -> str:
+    """What this worktree is carrying that origin/main does not, in a word.
+
+    Commits ahead is the headline; a dirty tree counts too, because uncommitted
+    work is the most easily forgotten kind. Best-effort — a worktree that cannot
+    be read is reported as unknown rather than silently clean.
+    """
+    ok, _ = run_capture(["git", "-C", str(path), "fetch", "origin", "--quiet"])
+    ok, ahead = run_capture(["git", "-C", str(path), "rev-list", "--count", "origin/main..HEAD"])
+    if not ok:
+        return "unknown"
+    ok, dirty = run_capture(["git", "-C", str(path), "status", "--porcelain"])
+    counts = []
+    if ahead.strip().isdigit() and int(ahead.strip()):
+        counts.append(f"{ahead.strip()} commit(s) ahead")
+    if ok and dirty.strip():
+        counts.append(f"{len(dirty.strip().splitlines())} uncommitted file(s)")
+    return ", ".join(counts) if counts else "clean"
+
+
+def cmd_wt_siblings(args: argparse.Namespace) -> int:
+    """Every repo carrying this worktree name, and what each still owes.
+
+    `make wt-new` cuts a feature in EVERY repo, so a feature is a set by
+    construction while /ship works one repo at a time. Shipping the repo you
+    happen to be sitting in leaves the rest of the set behind — which is how a
+    generated contract lands in one repo describing an app whose code is still
+    sitting in another repo's worktree. Exit 1 when a sibling still owes work,
+    so a gate can refuse rather than advise.
+    """
+    root = workspace_root(args.root)
+    name = args.name
+    carrying = [r for r in repos() if name in worktrees(root / r.dir)]
+    if not carrying:
+        print(f"[workspace] no repo has a worktree named {name!r}")
+        return 0
+    print(f"[workspace] worktree {name!r} exists in {len(carrying)} repo(s):")
+    owing = []
+    for repo in carrying:
+        state = unshipped(root / repo.dir / ".claude" / "worktrees" / name)
+        print(f"  {repo.name:<16} {state}")
+        if state not in ("clean", "unknown"):
+            owing.append(repo.name)
+    if owing:
+        print(
+            f"\n[workspace] {len(owing)} repo(s) still owe work: {', '.join(owing)}."
+            "\n[workspace] Ship the set, not the repo you are standing in."
+        )
+        return 1
+    return 0
+
+
 def cmd_wt_set_rm(args: argparse.Namespace) -> int:
     root = workspace_root(args.root)
     chosen = repos() if not args.repos else select(args.repos.split())
@@ -636,6 +704,9 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("wt-sets", help="which worktree names exist in which repos")
 
+    sibs = sub.add_parser("wt-siblings", help="which repos carry this worktree name, and what each still owes")
+    sibs.add_argument("name")
+
     drop = sub.add_parser("wt-set-rm", help="remove a worktree name from every repo that has it")
     drop.add_argument("name")
     drop.add_argument("--repos", help="space-separated (default: every repo that has it)")
@@ -648,6 +719,7 @@ def main(argv: list[str] | None = None) -> int:
         "matrix": cmd_matrix,
         "wt-set": cmd_wt_set,
         "wt-sets": cmd_wt_sets,
+        "wt-siblings": cmd_wt_siblings,
         "wt-set-rm": cmd_wt_set_rm,
     }
     return handlers[args.command](args)

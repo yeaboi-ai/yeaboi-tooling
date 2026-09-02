@@ -60,7 +60,7 @@ include $(TOOLING)/mk/clip.mk
 TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate demo
 
 .PHONY: wt-repair stash stash-list unstash \
-	wt-new wt-rm wt-set wt-set-rm wt-sets \
+	wt-new wt-rm wt-set wt-set-rm wt-sets wt-siblings \
         wt-one wt-one-rm wt-open wt-headless wt-issue wt-list wt-rm-all \
         workspace-setup workspace-status workspace-env \
         tooling-sync tooling-bump tooling-check contracts-sync contracts-check
@@ -117,6 +117,9 @@ wt-set-rm: wt-rm ## Alias for wt-rm
 
 wt-sets: ## Which worktree names exist in which repos (a name in several is a set)
 	@$(WORKSPACE) wt-sets
+
+wt-siblings: ## Which repos carry worktree NAME, and what each still owes (exit 1 if any does)
+	@$(WORKSPACE) wt-siblings "$(NAME)"
 
 # --- the single-repo set (what scripts and agents call) ----------------------
 

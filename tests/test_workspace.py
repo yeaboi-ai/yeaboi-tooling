@@ -299,6 +299,34 @@ class TestWorktreeSets:
         assert "shared-feature" in out and "(a set)" in out
         assert "solo" not in out, "a directory with no .git is not a worktree"
 
+    def test_a_branch_shaped_name_is_still_a_set(self, fleet: Path, capsys: pytest.CaptureFixture) -> None:
+        """`desktop/tips-ui` nests on disk, so a single-level scan saw only the
+        `desktop` parent — no .git, skipped — and the set went unreported. That
+        is how a feature ships in one repo and is forgotten in the other."""
+        workspace.main(["--root", str(fleet), "setup"])
+        for name in ("alpha", "beta"):
+            tree = fleet / name / ".claude" / "worktrees" / "desktop" / "tips-ui"
+            tree.mkdir(parents=True)
+            (tree / ".git").write_text("gitdir: elsewhere\n")
+        capsys.readouterr()
+
+        workspace.main(["--root", str(fleet), "wt-sets"])
+        out = capsys.readouterr().out
+
+        assert "desktop/tips-ui" in out, "a nested worktree name must survive the scan"
+        assert "(a set)" in out
+
+    def test_the_pinned_tooling_clone_is_not_a_worktree(self, fleet: Path) -> None:
+        """Every worktree carries a .tooling checkout at the pinned sha. It has a
+        .git, but it is not a worktree of this repo and must never be a name."""
+        workspace.main(["--root", str(fleet), "setup"])
+        tree = fleet / "alpha" / ".claude" / "worktrees" / "feature"
+        (tree / ".tooling").mkdir(parents=True)
+        (tree / ".git").write_text("gitdir: elsewhere\n")
+        (tree / ".tooling" / ".git").write_text("gitdir: elsewhere\n")
+
+        assert workspace.worktrees(fleet / "alpha") == ["feature"]
+
     def test_removing_a_name_no_repo_has_says_so(self, fleet: Path, capsys: pytest.CaptureFixture) -> None:
         workspace.main(["--root", str(fleet), "setup"])
         capsys.readouterr()
@@ -490,3 +518,45 @@ class TestTheNightly:
         """A cross-repo check you cannot trigger is one you cannot use to
         confirm a fix landed."""
         assert "workflow_dispatch" in nightly
+
+
+class TestWorktreeSiblings:
+    """The guard that stops a feature shipping from one repo of a set."""
+
+    @staticmethod
+    def _cut(fleet: Path, repo: str, name: str) -> Path:
+        tree = fleet / repo / ".claude" / "worktrees" / name
+        tree.mkdir(parents=True)
+        (tree / ".git").write_text("gitdir: elsewhere\n")
+        return tree
+
+    def test_a_sibling_owing_work_fails_the_check(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        for repo in ("alpha", "beta"):
+            self._cut(fleet, repo, "desktop/feature")
+        monkeypatch.setattr(workspace, "unshipped", lambda path: "3 commit(s) ahead")
+        capsys.readouterr()
+
+        rc = workspace.main(["--root", str(fleet), "wt-siblings", "desktop/feature"])
+        out = capsys.readouterr().out
+
+        assert rc == 1, "a sibling still owing work must fail, not merely advise"
+        assert "still owe work" in out
+        assert "alpha" in out and "beta" in out
+
+    def test_a_clean_set_passes(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._cut(fleet, "alpha", "solo-feature")
+        monkeypatch.setattr(workspace, "unshipped", lambda path: "clean")
+        capsys.readouterr()
+
+        assert workspace.main(["--root", str(fleet), "wt-siblings", "solo-feature"]) == 0
+
+    def test_an_unknown_name_is_not_a_failure(self, fleet: Path, capsys: pytest.CaptureFixture) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        capsys.readouterr()
+        assert workspace.main(["--root", str(fleet), "wt-siblings", "never-cut"]) == 0

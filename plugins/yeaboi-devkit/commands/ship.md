@@ -26,8 +26,25 @@ continuing. Never skip the verification steps.
 
 ---
 
-1. **Sanity.** Run `git branch --show-current`. If on `main`, stop: create a feature branch first.
-   Then `git fetch origin` (you need it in step 3 and it costs nothing here).
+1. **Sanity, and the rest of the set.** Run `git branch --show-current`. If on `main`, stop: create
+   a feature branch first. Then `git fetch origin` (you need it in step 3 and it costs nothing here).
+
+   Then, from the worktree's directory name (`.claude/worktrees/<NAME>`, which may contain a slash):
+
+   ```
+   make wt-siblings NAME=<name>
+   ```
+
+   **`make wt-new` cuts a feature in EVERY repo, so a feature is a set by construction while this
+   procedure ships one repo.** If that command exits non-zero, another repo's worktree is still
+   carrying commits or uncommitted files: **stop and say so**, naming the repos, before opening any
+   PR. Ship the set in dependency order — the repo that *generates* a vendored contract goes first,
+   the repos that *carry* it follow — or get the user's explicit go-ahead to ship this one alone.
+
+   This is not hypothetical. A feature once shipped from the Python repo alone while its desktop
+   half sat unmerged in the sibling worktree; the vendored manifest that landed described an app
+   nobody could find, and was "corrected" to match the older desktop before anyone thought to look
+   for a worktree of the same name. One command here would have shown it.
 
 2. **Commit.** Stage the relevant changes and commit with a lowercase imperative message (e.g. "add
    streaming output"), ending with the repo's `Co-Authored-By` trailer.
