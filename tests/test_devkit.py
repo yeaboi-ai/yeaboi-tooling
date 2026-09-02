@@ -370,3 +370,50 @@ class TestBootstrap:
         """The bootstrap is copied into every repo, so it is the one file that can rot silently."""
         text = _read(self.SYNC)
         assert "--check" in text and "has drifted from" in text
+
+
+class TestPluginCacheInvalidation:
+    """A command edited without a version bump never reaches anybody.
+
+    Clients cache the plugin under its declared version
+    (~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/), so an edit to a
+    command that leaves `version` alone is served from the old cache forever.
+    That is not hypothetical: /ship gained a whole step, merged, and every repo
+    kept running the previous copy — the change was invisible until somebody
+    asked why the new behaviour never showed up.
+
+    The fingerprint makes the omission loud: change a command, and this fails
+    until you bump the version and re-record the sha.
+    """
+
+    PLUGIN = ROOT / "plugins" / "yeaboi-devkit"
+    SHA_FILE = PLUGIN / ".claude-plugin" / "CONTENT_SHA"
+
+    @classmethod
+    def _fingerprint(cls) -> str:
+        import hashlib
+
+        digest = hashlib.sha256()
+        files = sorted(
+            p for p in cls.PLUGIN.rglob("*") if p.is_file() and ".claude-plugin" not in p.parts
+        )
+        for path in files:
+            digest.update(path.relative_to(cls.PLUGIN).as_posix().encode())
+            digest.update(path.read_bytes())
+        return digest.hexdigest()
+
+    def test_the_recorded_fingerprint_matches_the_plugin(self):
+        assert self.SHA_FILE.is_file(), "the plugin needs a recorded CONTENT_SHA"
+        recorded = self.SHA_FILE.read_text().strip()
+        actual = self._fingerprint()
+        assert recorded == actual, (
+            "the plugin's files changed. Clients cache it by the version in "
+            "plugin.json, so bump that version, then re-record:\n"
+            f"  echo {actual} > {self.SHA_FILE.relative_to(ROOT)}"
+        )
+
+    def test_the_version_is_a_plain_three_part_number(self):
+        import json
+
+        version = json.loads((self.PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
+        assert re.fullmatch(r"\d+\.\d+\.\d+", version), f"unusable cache key: {version!r}"
