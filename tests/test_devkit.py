@@ -394,9 +394,7 @@ class TestPluginCacheInvalidation:
         import hashlib
 
         digest = hashlib.sha256()
-        files = sorted(
-            p for p in cls.PLUGIN.rglob("*") if p.is_file() and ".claude-plugin" not in p.parts
-        )
+        files = sorted(p for p in cls.PLUGIN.rglob("*") if p.is_file() and ".claude-plugin" not in p.parts)
         for path in files:
             digest.update(path.relative_to(cls.PLUGIN).as_posix().encode())
             digest.update(path.read_bytes())
