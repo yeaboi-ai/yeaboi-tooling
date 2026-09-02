@@ -294,6 +294,14 @@ class TestShipRunsTheGate:
     def test_ship_names_the_gate(self):
         assert "make ship-gate" in _read(self.SHIP)
 
+    def test_ship_checks_the_rest_of_the_worktree_set(self):
+        """`make wt-new` cuts a feature in every repo; /ship works one repo at a
+        time. Without this check a feature ships from one repo and the rest of
+        the set is forgotten — which has happened, to a vendored contract."""
+        text = _read(self.SHIP)
+        assert "wt-siblings" in text, "/ship must look for the rest of the set before opening a PR"
+        assert "dependency order" in text, "/ship must say which repo of a set goes first"
+
     def test_ship_fetches_and_rebases_before_verifying(self):
         text = _read(self.SHIP)
         assert "git fetch origin" in text, "/ship must fetch — it verified stale trees for months without one"
