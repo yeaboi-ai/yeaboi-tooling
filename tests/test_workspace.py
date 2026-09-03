@@ -489,6 +489,90 @@ class TestCuttingASet:
         assert not spec.exists()
 
 
+class TestRemovingANestedSet:
+    """wt-set-rm of a branch-shaped name — the spec nests, and so does the debris.
+
+    The per-repo removal is a `make` in another checkout, stubbed like
+    TestCuttingASet stubs the cut; what this class owns is the workspace half:
+    the nested .code-workspace, its now-empty parent dirs, and the shared data
+    home that may only go once NO repo still carries the name.
+    """
+
+    @staticmethod
+    def _rm_stub(monkeypatch: pytest.MonkeyPatch):
+        """Stand in for `make -C <repo> wt-one-rm`, doing what wt.sh's rm does:
+        the tree goes, and so do its empty parents."""
+
+        def fake(args: list[str], cwd=None) -> tuple[bool, str]:
+            name = next(a.split("=", 1)[1] for a in args if a.startswith("NAME="))
+            home = Path(args[2]) / ".claude" / "worktrees"
+            shutil.rmtree(home / name, ignore_errors=True)
+            parent = (home / name).parent
+            while parent != home and home in parent.parents:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+            return True, f"[wt] removed worktree '{name}' (dir + branch)\n"
+
+        monkeypatch.setattr(workspace, "run_capture", fake)
+
+    @staticmethod
+    def _plant(fleet: Path, name: str, repos: tuple[str, ...] = ("alpha", "beta")) -> None:
+        for repo in repos:
+            tree = fleet / repo / ".claude" / "worktrees" / name
+            tree.mkdir(parents=True)
+            (tree / ".git").write_text("gitdir: elsewhere\n")
+
+    def test_the_nested_spec_and_its_empty_parent_go_together(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._plant(fleet, "desktop/feature")
+        spec = fleet / ".worktrees" / "desktop" / "feature.code-workspace"
+        spec.parent.mkdir(parents=True)
+        spec.write_text("{}\n")
+        self._rm_stub(monkeypatch)
+
+        code = workspace.main(["--root", str(fleet), "wt-set-rm", "desktop/feature"])
+
+        assert code == 0
+        assert not spec.exists()
+        assert not spec.parent.exists(), "the empty .worktrees/desktop/ dir survived"
+        assert (fleet / ".worktrees").is_dir(), "the walk must stop at the sets root"
+
+    def test_a_sibling_set_keeps_the_shared_parent(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._plant(fleet, "desktop/feature")
+        spec = fleet / ".worktrees" / "desktop" / "feature.code-workspace"
+        spec.parent.mkdir(parents=True)
+        spec.write_text("{}\n")
+        sibling = fleet / ".worktrees" / "desktop" / "other.code-workspace"
+        sibling.write_text("{}\n")
+        self._rm_stub(monkeypatch)
+
+        assert workspace.main(["--root", str(fleet), "wt-set-rm", "desktop/feature"]) == 0
+
+        assert not spec.exists()
+        assert sibling.is_file(), "removing one set took a sibling set's window spec dir"
+
+    def test_the_data_home_goes_only_when_no_repo_carries_the_name(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._plant(fleet, "desktop/feature")
+        home = workspace.wt_slots.home_for("desktop/feature")
+        home.mkdir(parents=True)
+        self._rm_stub(monkeypatch)
+
+        assert workspace.main(["--root", str(fleet), "wt-set-rm", "desktop/feature", "--repos", "alpha"]) == 0
+        assert home.is_dir(), "beta still carries the name — its shared state went anyway"
+
+        assert workspace.main(["--root", str(fleet), "wt-set-rm", "desktop/feature"]) == 0
+        assert not home.exists()
+
+
 class TestTheNightly:
     """The one check nobody's PR can run, so nothing else notices it rotting."""
 

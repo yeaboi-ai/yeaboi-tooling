@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -172,6 +173,21 @@ def release(name: str) -> None:
         table = _read(path)
         if table.pop(name, None) is not None:
             _write(path, table)
+
+
+def purge_home(name: str) -> bool:
+    """Delete this name's data home; True if something was removed.
+
+    NOT part of release(): the home is shared by the whole set (same name, five
+    repos), so a per-repo `wt-one-rm` must never take it — workspace.py calls
+    this once, after confirming NO repo still carries the name. Guarded to only
+    ever touch a direct child of ~/.yeaboi-worktrees, whatever slug() returns.
+    """
+    home = home_for(name)
+    if home.parent != Path.home() / ".yeaboi-worktrees" or not home.is_dir():
+        return False
+    shutil.rmtree(home, ignore_errors=True)
+    return True
 
 
 def get(name: str) -> int | None:

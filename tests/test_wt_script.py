@@ -298,6 +298,95 @@ class TestRemoteBranch:
         assert _git(repo, "rev-parse", "feature/nested-fix", env=env) == remote_tip
 
 
+class TestNestedNames:
+    """A '/' in NAME nests the directory — creation, removal and the guards between.
+
+    The parent path (.claude/worktrees/desktop while desktop/feature exists) is
+    a plain directory HOLDING worktrees, and every action that derives a path
+    from NAME must know the difference: `rm` of the prefix used to rm -rf every
+    nested tree's uncommitted work, and a "refresh" of it ran `git -C` commands
+    that resolve to the main checkout itself.
+    """
+
+    def test_rm_of_a_nested_name_round_trips(self, repo: Path, env: dict[str, str]) -> None:
+        assert _run_wt(repo, "feature/nested-fix", env).returncode == 0
+
+        result = _run_wt(repo, "feature/nested-fix", env, action="rm")
+
+        assert result.returncode == 0, result.stderr
+        assert not (repo / ".claude" / "worktrees" / "feature" / "nested-fix").exists()
+        # The now-empty parent must go too: left behind, it makes the next
+        # `wt-new NAME=feature` read as a refresh of a non-worktree dir.
+        assert not (repo / ".claude" / "worktrees" / "feature").exists()
+        assert _git(repo, "branch", "--list", "feature/nested-fix", env=env) == ""
+        # And the name's prefix is a normal name again: a fresh CREATE, not a refresh.
+        after = _run_wt(repo, "feature", env)
+        assert after.returncode == 0, after.stderr
+        assert "branched 'feature'" in after.stdout
+
+    def test_rm_of_a_prefix_refuses_and_preserves_nested_worktrees(self, repo: Path, env: dict[str, str]) -> None:
+        """The data-loss case: rm -rf of the parent dir used to eat both trees."""
+        assert _run_wt(repo, "desktop/feature", env).returncode == 0
+        assert _run_wt(repo, "desktop/other", env).returncode == 0
+        keep = repo / ".claude" / "worktrees" / "desktop" / "feature" / "half-done.txt"
+        keep.write_text("uncommitted work\n")
+
+        result = _run_wt(repo, "desktop", env, action="rm")
+
+        assert result.returncode != 0
+        assert "desktop/feature" in result.stderr
+        assert "desktop/other" in result.stderr
+        for name in ("feature", "other"):
+            tree = repo / ".claude" / "worktrees" / "desktop" / name
+            assert (tree / ".git").exists(), f"{name} was unregistered"
+        assert keep.read_text() == "uncommitted work\n"
+
+    def test_rm_of_a_stale_unregistered_dir_still_cleans(self, repo: Path, env: dict[str, str]) -> None:
+        """Debris from a crashed rm or a hand-deleted tree stays removable."""
+        stale = repo / ".claude" / "worktrees" / "stale"
+        stale.mkdir(parents=True)
+        (stale / "junk.txt").write_text("x\n")
+
+        result = _run_wt(repo, "stale", env, action="rm")
+
+        assert result.returncode == 0, result.stderr
+        assert not stale.exists()
+
+    def test_creating_under_an_existing_branch_refuses_before_mkdir(self, repo: Path, env: dict[str, str]) -> None:
+        """git cannot hold 'desktop' and 'desktop/feature' at once; say so up front."""
+        _git(repo, "branch", "desktop", env=env)
+
+        result = _run_wt(repo, "desktop/feature", env)
+
+        assert result.returncode != 0
+        assert "branch 'desktop' exists" in result.stderr
+        # The old failure came out of `git worktree add`, after mkdir -p had
+        # already orphaned the parent dir. Nothing may be left behind now.
+        assert not (repo / ".claude" / "worktrees" / "desktop").exists()
+
+    def test_creating_a_prefix_of_an_existing_worktree_refuses(self, repo: Path, env: dict[str, str]) -> None:
+        """The dir exists (it holds desktop/feature), so the old code 'refreshed' it —
+        with git commands that resolve to the MAIN checkout."""
+        assert _run_wt(repo, "desktop/feature", env).returncode == 0
+        main_tip = _git(repo, "rev-parse", "main", env=env)
+
+        result = _run_wt(repo, "desktop", env)
+
+        assert result.returncode != 0
+        assert "desktop/feature" in result.stderr
+        assert _git(repo, "rev-parse", "main", env=env) == main_tip
+        assert (repo / ".claude" / "worktrees" / "desktop" / "feature" / ".git").exists()
+
+    def test_repair_refuses_the_prefix_dir(self, repo: Path, env: dict[str, str]) -> None:
+        """Repairing .claude/worktrees/desktop would hand a slot to nobody's tree."""
+        assert _run_wt(repo, "desktop/feature", env).returncode == 0
+
+        result = _run_wt(repo, "desktop", env, action="repair")
+
+        assert result.returncode != 0
+        assert not (repo / ".claude" / "worktrees" / "desktop" / ".worktree.env").exists()
+
+
 class TestLocalDefaultSync:
     """The main checkout's own default branch is a convenience, never a risk."""
 

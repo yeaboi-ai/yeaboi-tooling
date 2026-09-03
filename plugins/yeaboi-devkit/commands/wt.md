@@ -47,6 +47,9 @@ or when the work genuinely lives in one repo.
   the paths from `make wt-sets`) and has no unmerged work; warn and ask before removing anything
   dirty. Then run `make wt-rm NAME=<name>`, which removes it from every repo that has it and deletes
   the `.code-workspace`. `REPOS="…"` narrows it; `make wt-one-rm NAME=<name>` is this repo alone.
+  `<name>` is the path after `.claude/worktrees/`, slashes included (`desktop/feature`, never just
+  `feature`) — take it from `make wt-sets` output or `${PWD#*/.claude/worktrees/}`, not from
+  `basename`, which drops everything before the last slash and removes nothing.
 - `sets` — run `make wt-sets`: which worktree names exist in which repos, across the workspace. A
   name in more than one repo is a set.
 

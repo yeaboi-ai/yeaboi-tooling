@@ -29,7 +29,10 @@ continuing. Never skip the verification steps.
 1. **Sanity, and the rest of the set.** Run `git branch --show-current`. If on `main`, stop: create
    a feature branch first. Then `git fetch origin` (you need it in step 3 and it costs nothing here).
 
-   Then, from the worktree's directory name (`.claude/worktrees/<NAME>`, which may contain a slash):
+   Then derive `<name>` from the worktree path: it is **everything after `.claude/worktrees/`** in
+   `pwd` — `name="${PWD#*/.claude/worktrees/}"`. A nested name like `desktop/feature` must keep its
+   slash: `basename` would say `feature`, and `make wt-siblings NAME=feature` then prints "no repo
+   has a worktree named 'feature'" and exits 0 — a false all-clear that skips this whole check.
 
    ```
    make wt-siblings NAME=<name>
