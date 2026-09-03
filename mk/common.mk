@@ -26,7 +26,14 @@ TOOLING_REPO ?= https://github.com/yeaboi-ai/yeaboi-tooling.git
 -include $(CURDIR)/.worktree.env
 
 # This worktree's name, for anything that must not collide with a sibling.
-WT_SELF = $(if $(YEABOI_WT_NAME),$(YEABOI_WT_NAME),$(notdir $(CURDIR)))
+# Preferred source is .worktree.env (YEABOI_WT_NAME); the path fallback must
+# survive NESTED names: inside .claude/worktrees/desktop/feature, $(notdir)
+# says 'feature', and the stash tags of desktop/feature and mobile/feature
+# would collide — `make unstash` in one could eat the other's stash. Split
+# $(CURDIR) on the marker and take the LAST word: a space anywhere in the
+# path prefix falls away with the prefix, and the suffix is a git branch
+# name, which can never contain a space itself.
+WT_SELF = $(if $(YEABOI_WT_NAME),$(YEABOI_WT_NAME),$(if $(findstring /.claude/worktrees/,$(CURDIR)),$(lastword $(subst /.claude/worktrees/, ,$(CURDIR))),$(notdir $(CURDIR))))
 
 # Editor CLI used by every target that opens a window. Override for VS Code
 # forks (e.g. `CODE=cursor make wt-new NAME=my-feature`).

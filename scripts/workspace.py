@@ -674,9 +674,27 @@ def cmd_wt_set_rm(args: argparse.Namespace) -> int:
     if spec.is_file():
         spec.unlink()
         print(f"[workspace] removed {spec}")
+        # A nested name ('desktop/feature') nests the spec too; drop the chain
+        # of now-empty parents, stopping at the sets root itself. rmdir only —
+        # a parent still holding another set's spec refuses, ending the walk.
+        sets_root = root / WT_SETS_DIR
+        parent = spec.parent
+        while parent != sets_root and sets_root in parent.parents:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
     if not removed:
         print(f"[workspace] no repo has a worktree named '{args.name}'")
         return 1
+    # The data home is keyed on NAME and shared by the whole set, so it may
+    # only go once NO repo carries the name — scanned across ALL repos, not
+    # just the --repos selection, so a narrowed removal never deletes a home
+    # the un-narrowed repos still use.
+    if not any(args.name in worktrees(root / r.dir) for r in repos()):
+        if wt_slots.purge_home(args.name):
+            print(f"[workspace] removed data home {wt_slots.home_for(args.name)}")
     print(f"[workspace] removed '{args.name}' from: {', '.join(removed)}")
     return 0
 

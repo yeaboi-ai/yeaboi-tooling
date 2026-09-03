@@ -124,6 +124,27 @@ class TestTheDataHome:
     def test_a_slashed_name_does_not_escape_the_directory(self) -> None:
         assert wt_slots.home_for("../../etc").parent == Path.home() / ".yeaboi-worktrees"
 
+    def test_purge_home_deletes_the_home_and_only_the_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        home = wt_slots.home_for("desktop/feature")
+        home.mkdir(parents=True)
+        (home / "state.json").write_text("{}\n")
+        sibling = home.parent / "other-feature"
+        sibling.mkdir()
+
+        assert wt_slots.purge_home("desktop/feature") is True
+
+        assert not home.exists()
+        assert sibling.is_dir(), "a sibling worktree's home went with it"
+
+    def test_purge_home_of_a_home_that_is_not_there_is_a_no_op(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert wt_slots.purge_home("never-cut") is False
+
 
 class TestTheGeneratedFile:
     def _render(self, tmp_path: Path, name: str = "demo") -> Path:

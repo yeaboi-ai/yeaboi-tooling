@@ -96,12 +96,58 @@ write_worktree_env() {
   echo "[wt] slot $(python3 "$SCRIPT_DIR/wt_slots.py" get "$NAME") — private ports + YEABOI_HOME in .worktree.env"
 }
 
+# Registered means: `git worktree list` names exactly this path. That listing
+# still includes prunable entries whose directory was hand-deleted, so a nested
+# worktree keeps protecting its parent until someone prunes it.
+wt_registered() {
+  git -C "$ROOT" worktree list --porcelain | grep -qFx "worktree $1"
+}
+
+# substr($0,10), not $2: a workspace path with a space would split the field.
+registered_under() {  # registered worktree paths strictly below $1
+  git -C "$ROOT" worktree list --porcelain \
+    | awk '/^worktree /{print substr($0, 10)}' | grep -F "$1/" || true
+}
+
 if [ "$ACTION" = "rm" ]; then
+  WT_HOME="$ROOT/.claude/worktrees"
+  # A '/' in NAME nests the worktree (desktop/feature), which makes the parent
+  # path (.claude/worktrees/desktop) a plain directory HOLDING worktrees. git
+  # refuses to remove that — silently, under the `|| true` — and the rm -rf
+  # that used to follow unconditionally would then eat every nested tree's
+  # uncommitted work. So: force-remove only what git itself registers as a
+  # worktree; a dir git does not register is cleared only when nothing
+  # registered lives under it.
+  if wt_registered "$TARGET"; then
+    git -C "$ROOT" worktree remove --force "$TARGET" 2>/dev/null || true
+    rm -rf "$TARGET"  # leftovers git left behind (untracked dirs it refuses)
+  elif [ -e "$TARGET" ]; then
+    NESTED="$(registered_under "$TARGET")"
+    if [ -n "$NESTED" ]; then
+      echo "[wt] refusing: '$NAME' is not a worktree — it is a directory holding these worktrees:" >&2
+      printf '%s\n' "$NESTED" | sed "s|^$WT_HOME/|       |" >&2
+      echo "     remove them by their full names: make wt-one-rm NAME=<one of the above>" >&2
+      exit 1
+    fi
+    # Stale: on disk but git registers nothing at or below it (a crashed
+    # earlier rm, a hand-deleted tree). Clearing it is the repair.
+    rm -rf "$TARGET"
+  fi
   python3 "$SCRIPT_DIR/wt_slots.py" release "$NAME" 2>/dev/null || true
-  git -C "$ROOT" worktree remove --force "$TARGET" 2>/dev/null || true
-  rm -rf "$TARGET"
   git -C "$ROOT" worktree prune
   git -C "$ROOT" branch -D "$NAME" 2>/dev/null || true
+
+  # A nested name leaves empty parents behind (rm of desktop/feature leaves
+  # .claude/worktrees/desktop/), and an empty parent makes the NEXT
+  # `wt-new NAME=desktop` take the refresh path in a non-worktree dir. Plain
+  # rmdir, never -p and never rm: a parent still holding a sibling refuses,
+  # which ends the walk; the loop condition pins it strictly under $WT_HOME.
+  d="$(dirname "$TARGET")"
+  while [ "$d" != "$WT_HOME" ] && [ "${d#"$WT_HOME"/}" != "$d" ]; do
+    rmdir "$d" 2>/dev/null || break
+    d="$(dirname "$d")"
+  done
+
   echo "[wt] removed worktree '$NAME' (dir + branch)"
   exit 0
 fi
@@ -110,7 +156,10 @@ fi
 # refresh path below already refuses to rewrite .env, .vscode/ or provisioning
 # under a live worktree, and this must not either.
 if [ "$ACTION" = "repair" ]; then
-  if [ ! -d "$TARGET" ]; then
+  # wt_registered, not -d: .claude/worktrees/desktop EXISTS as a plain dir when
+  # desktop/feature is a worktree, and repairing it would hand a slot and a
+  # .worktree.env to a directory that is nobody's tree.
+  if ! wt_registered "$TARGET"; then
     echo "[wt] no worktree '$NAME' to repair at $TARGET" >&2
     exit 1
   fi
@@ -244,10 +293,35 @@ rebase_onto_base() {
 }
 
 if [ ! -d "$TARGET" ]; then
+  # A '/' nests the git ref as well as the directory, and two shapes collide in
+  # the ref namespace: a branch UNDER this name (desktop/feature blocks creating
+  # 'desktop') and a branch that is a PREFIX of it ('desktop' blocks
+  # desktop/feature). git would refuse deep inside `worktree add`, AFTER the
+  # mkdir below already orphaned a parent dir — refuse here instead, with the
+  # real reason. (Remote-only variants still fail inside git, but those cuts
+  # create no local dirs first.)
+  UNDER="$(git -C "$ROOT" for-each-ref --count=1 --format='%(refname:short)' "refs/heads/$NAME/")"
+  if [ -n "$UNDER" ]; then
+    echo "[wt] refusing: branches already exist under '$NAME/' (e.g. $UNDER)" >&2
+    echo "     git cannot hold branch '$NAME' and '$NAME/…' at once — pick a non-prefix name, or remove the nested worktrees first" >&2
+    exit 1
+  fi
+  p="$NAME"
+  while [ "${p%/*}" != "$p" ]; do
+    p="${p%/*}"
+    if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$p"; then
+      echo "[wt] refusing: branch '$p' exists, so git cannot create '$NAME' (a ref cannot live under another ref)" >&2
+      exit 1
+    fi
+    # And the directory shape of the same collision: if '$p' is itself a
+    # registered worktree, '$NAME' would be cut INSIDE its working tree.
+    if wt_registered "$ROOT/.claude/worktrees/$p"; then
+      echo "[wt] refusing: worktree '$p' exists — '$NAME' would land inside its working tree" >&2
+      exit 1
+    fi
+  done
   # dirname, not the fixed worktrees dir: branch names may contain '/'
   # (feature/foo, GitHub's 123-issue-title style), which nests the target.
-  # Known edge: if a worktree named exactly like the prefix exists (branch
-  # 'feat' AND 'feat/x'), the nested one lands inside the other's working tree.
   mkdir -p "$(dirname "$TARGET")"
   resolve_base
   sync_local_default
@@ -341,6 +415,22 @@ EOF
 }
 EOF
   fi
+elif ! wt_registered "$TARGET"; then
+  # The directory exists but git does not register it as a worktree. Two ways
+  # here: NAME is a PREFIX of nested worktrees (.claude/worktrees/desktop while
+  # desktop/feature exists — the dir is their parent, not a tree), or the dir is
+  # stale debris an interrupted rm left behind. "Refreshing" either would run
+  # `git -C $TARGET`, which resolves to the MAIN checkout — and rebase THAT.
+  NESTED="$(registered_under "$TARGET")"
+  if [ -n "$NESTED" ]; then
+    echo "[wt] refusing: '$NAME' is not a worktree — it is a directory holding these worktrees:" >&2
+    printf '%s\n' "$NESTED" | sed "s|^$ROOT/.claude/worktrees/|       |" >&2
+    echo "     pick a name that is not a prefix of an existing worktree" >&2
+  else
+    echo "[wt] refusing: $TARGET exists but is not a registered worktree (stale debris?)" >&2
+    echo "     clear it with: make wt-one-rm NAME=$NAME   — then re-run this" >&2
+  fi
+  exit 1
 else
   # The refresh. Re-running the same command is how a feature's worktrees are
   # brought back onto the latest base — `make wt-new NAME=x` a second time does it
