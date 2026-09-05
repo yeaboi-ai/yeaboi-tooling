@@ -296,11 +296,38 @@ class TestShipRunsTheGate:
 
     def test_ship_checks_the_rest_of_the_worktree_set(self):
         """`make wt-new` cuts a feature in every repo; /ship works one repo at a
-        time. Without this check a feature ships from one repo and the rest of
-        the set is forgotten — which has happened, to a vendored contract."""
+        time. Without this scan a feature ships from one repo and the rest of
+        the set is forgotten — which has happened, to a vendored contract.
+
+        But it is an advisory in the report, after the PR: another worktree's
+        work is never shipped from here, so "ship this one alone or stop?" has
+        only one answer and must never be asked."""
         text = _read(self.SHIP)
-        assert "wt-siblings" in text, "/ship must look for the rest of the set before opening a PR"
-        assert "dependency order" in text, "/ship must say which repo of a set goes first"
+        assert "wt-siblings" in text, "/ship must look for the rest of the set"
+        assert "generates" in text and "merges first" in text, "/ship must say which repo of a set goes first"
+        fenced = re.search(r"^[ \t]*```\n[ \t]*make wt-siblings NAME=<name>\n[ \t]*```", text, re.MULTILINE)
+        assert fenced, "the sibling scan should be shown as a single fenced command"
+        assert text.index("gh pr create") < fenced.start(), (
+            "the sibling scan is a post-ship advisory — it must come after the PR is opened"
+        )
+        for question in ("explicit go-ahead", "stop and say so", "ship this one alone"):
+            assert question not in text, f"/ship must not turn the sibling scan into a question: {question!r}"
+
+    def test_the_record_pointer_comes_after_the_pr(self):
+        """A clip is worth mentioning, but as an advisory once the PR exists — not a gate."""
+        text = _read(self.SHIP)
+        assert "/record" in text, "/ship should still point at /record for user-facing changes"
+        assert text.index("gh pr create") < text.index("/record"), (
+            "every /record mention must sit in the report, after the PR is opened"
+        )
+        assert "before creating the PR" not in text
+        assert "offer `/record`" not in text
+
+    def test_ship_asks_nothing_of_its_own(self):
+        """The only flag left is `auto-merge`; `no-record` guarded an offer that no longer exists."""
+        text = _read(self.SHIP)
+        assert "no-record" not in text
+        assert "asks the user nothing" in text
 
     def test_ship_fetches_and_rebases_before_verifying(self):
         text = _read(self.SHIP)

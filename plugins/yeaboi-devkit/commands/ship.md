@@ -3,8 +3,11 @@ description: Ship the current feature branch — review, full gate, commit, push
 ---
 
 Ship the current feature branch. Arguments (optional): $ARGUMENTS — may include `auto-merge` to
-enable auto-merge for low-risk changes (docs/chores/small fixes only), and `no-record` to skip the
-offer to attach a feature clip.
+enable auto-merge for low-risk changes (docs/chores/small fixes only).
+
+**This procedure asks the user nothing of its own.** Whatever it learns along the way that the user
+might act on — a sibling worktree still carrying work, a change worth a clip — is reported in step
+10, after the PR exists, as an advisory. It never becomes a question in front of the push.
 
 The contract this branch must satisfy: tests for every change, lint clean, security scan clean, and
 whatever else this repo's gate covers — `make ship-gate` is the single command that decides. The
@@ -26,28 +29,13 @@ continuing. Never skip the verification steps.
 
 ---
 
-1. **Sanity, and the rest of the set.** Run `git branch --show-current`. If on `main`, stop: create
-   a feature branch first. Then `git fetch origin` (you need it in step 3 and it costs nothing here).
+1. **Sanity.** Run `git branch --show-current`. If on `main`, stop: create a feature branch first.
+   Then `git fetch origin` (you need it in step 3 and it costs nothing here).
 
-   Then derive `<name>` from the worktree path: it is **everything after `.claude/worktrees/`** in
-   `pwd` — `name="${PWD#*/.claude/worktrees/}"`. A nested name like `desktop/feature` must keep its
-   slash: `basename` would say `feature`, and `make wt-siblings NAME=feature` then prints "no repo
-   has a worktree named 'feature'" and exits 0 — a false all-clear that skips this whole check.
-
-   ```
-   make wt-siblings NAME=<name>
-   ```
-
-   **`make wt-new` cuts a feature in EVERY repo, so a feature is a set by construction while this
-   procedure ships one repo.** If that command exits non-zero, another repo's worktree is still
-   carrying commits or uncommitted files: **stop and say so**, naming the repos, before opening any
-   PR. Ship the set in dependency order — the repo that *generates* a vendored contract goes first,
-   the repos that *carry* it follow — or get the user's explicit go-ahead to ship this one alone.
-
-   This is not hypothetical. A feature once shipped from the Python repo alone while its desktop
-   half sat unmerged in the sibling worktree; the vendored manifest that landed described an app
-   nobody could find, and was "corrected" to match the older desktop before anyone thought to look
-   for a worktree of the same name. One command here would have shown it.
+   This ships **this repo's worktree only**. Other repos may carry a same-named worktree — `make
+   wt-new` cuts a feature in every repo — and their work is theirs to ship, from their own `/ship`.
+   Nothing here looks at them until the PR is open (step 10), and nothing here ever asks whether to
+   ship them.
 
 2. **Commit.** Stage the relevant changes and commit with a lowercase imperative message (e.g. "add
    streaming output"), ending with the repo's `Co-Authored-By` trailer.
@@ -107,10 +95,9 @@ continuing. Never skip the verification steps.
    - Title: same style as the commit message.
    - Body: a Summary section (what and why), a Test plan section (what was run), and the standard
      "🤖 Generated with Claude Code" footer.
-   - **A `## Demo` section, if this change is worth seeing.** When the diff touches a user-facing
-     surface, offer `/record` before creating the PR and include the section it prints. A clip is
-     optional — take the offer once, and drop it if the user declines or the change is invisible.
-     `no-record` in `$ARGUMENTS` skips the offer entirely.
+   - **No `## Demo` section yet.** A clip is attached *after* the PR exists: `/record` appends the
+     section with `gh pr edit`. Do not offer it here — step 10 points at it if the change is worth
+     seeing.
 
    **Some repos rewrite the branch a minute after the push** — a version-bump commit pushed onto the
    PR branch by CI, for instance. Where that is true, `.claude/repo-notes.md` says so and says what
@@ -151,6 +138,38 @@ continuing. Never skip the verification steps.
 10. **Report** — output the PR URL and a one-line status, ending with what is still outstanding: the
     pending review. If step 3 or step 7 rebased, say how far behind the branch had fallen and what
     conflicted.
+
+    Then the **advisories**: things the user may want to act on next, stated as facts. **Not
+    questions, not offers, and never a reason to undo or hold anything above.** The PR is open; these
+    are what to do after it.
+
+    - **The rest of the set.** Derive `<name>` from the worktree path: it is **everything after
+      `.claude/worktrees/`** in `pwd` — `name="${PWD#*/.claude/worktrees/}"`. A nested name like
+      `desktop/feature` must keep its slash: `basename` would say `feature`, and `make wt-siblings
+      NAME=feature` then prints "no repo has a worktree named 'feature'" and exits 0 — a false
+      all-clear that hides the siblings. Then:
+
+      ```
+      make wt-siblings NAME=<name>
+      ```
+
+      **A non-zero exit here is information, not a failed step** — the "if any step fails, stop"
+      rule does not apply to it. It exits 1 when another repo's worktree still carries commits or
+      uncommitted files. For each such repo, one line: the repo, what it owes, and that it ships
+      from its own worktree with its own `/ship`. Add the ordering hint when a vendored contract is
+      involved: the repo that *generates* the contract merges first, and until it does the
+      `contracts-check` / manifest-match gates on the downstream PR stay red on purpose. Do not
+      offer to ship, stash, commit or otherwise touch a sibling's work — it is not this PR's.
+
+      This scan exists because a feature once shipped from the Python repo while its desktop half
+      sat unmerged in the sibling worktree; the vendored manifest that landed described an app
+      nobody could find, and was "corrected" to match the older desktop before anyone thought to
+      look for a worktree of the same name. One line in the report would have shown it.
+
+    - **A clip.** If the diff touches a user-facing surface, one line: this changes what a user
+      sees, and `/record` will script a short clip and attach it to PR #<n>. If the change is
+      invisible — a refactor, a CI change, a dependency bump — say nothing. Where the repo runs
+      `clip-check.yml`, CI posts the same nudge on the PR; this line just gets there first.
 
 ---
 

@@ -218,7 +218,8 @@ python3 .tooling/scripts/clip_publish.py .demo/out/my-feature.gif --markdown
 ```
 
 `/record` does all of this — reads the diff, reads the repo's `## Clips` notes, writes the spec,
-records, publishes and attaches. `/ship` offers it when a diff touches a user-facing surface.
+records, publishes and attaches. `/ship` points at it in its final report when a diff touches a
+user-facing surface — the PR opens first, and the clip is attached to it afterwards.
 
 A repo opts into the CI half by calling `clip-check.yml` from its own `ci.yml` with the globs that
 mean "a user could see this". **Neither of its jobs may ever be a required check** — the nudge
