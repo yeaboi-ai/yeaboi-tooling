@@ -65,7 +65,9 @@ exist, and the traps specific to it. The procedure is here; the facts are there.
 
    That pushes the GIF to the repo's orphan `demo-media` branch and prints a `## Demo` section. If a
    PR exists, append it to the body with `gh pr edit`; keep any existing body and add the section at
-   the end. If there is no PR yet, hand the markdown to `/ship`, which will include it.
+   the end. The normal order is `/ship` first, then `/record` — `/ship` points here from its final
+   report when the change is worth seeing, and the PR it opened is where the section goes. If you
+   recorded before shipping, keep the markdown and attach it the same way once the PR is open.
 
    Re-recording the same slug on the same branch overwrites in place, so the image already in the PR
    updates rather than being orphaned.
