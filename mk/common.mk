@@ -67,8 +67,8 @@ include $(TOOLING)/mk/clip.mk
 TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate demo
 
 .PHONY: wt-repair stash stash-list unstash \
-	wt-new wt-rm wt-set wt-set-rm wt-sets wt-siblings \
-        wt-one wt-one-rm wt-open wt-headless wt-issue wt-list wt-rm-all \
+	wt-new wt-rm wt-rm-all wt-set wt-set-rm wt-sets wt-siblings \
+        wt-one wt-one-rm wt-open wt-headless wt-issue wt-list \
         workspace-setup workspace-status workspace-env \
         tooling-sync tooling-bump tooling-check contracts-sync contracts-check
 
@@ -76,12 +76,13 @@ TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate demo
 #
 # Two altitudes, and which one a target is at is the whole design:
 #
-#   wt-new / wt-rm  act on the WHOLE workspace. One feature is one branch of the
+#   wt-new / wt-rm / wt-rm-all
+#                   act on the WHOLE workspace. One feature is one branch of the
 #                   same name in every repo, opened as ONE multi-root VS Code
 #                   window with one claude session that can see all of them.
 #                   REPOS="yeaboi frontend" narrows them to a few.
 #
-#   wt-one / wt-open / wt-headless / wt-issue / wt-one-rm / wt-rm-all
+#   wt-one / wt-open / wt-headless / wt-issue / wt-one-rm
 #                   act on THIS repo only. wt-headless in particular must never
 #                   widen: the plugin's unattended fan-out (/babysit-prs,
 #                   /migrate) cuts one worktree per PR with it, and five per PR
@@ -106,6 +107,7 @@ WT_ENV = WT_REPO_DIR="$(CURDIR)" CODE="$(CODE)" WT_REUSE_BRANCH="$(WT_REUSE)"
 WT_REPOS = $(if $(strip $(REPOS)),--repos "$(strip $(REPOS))",)
 WT_HEADLESS = $(if $(filter-out 0,$(HEADLESS)),--headless,)
 WT_REUSE_FLAG = $(if $(WT_REUSE),--reuse,)
+WT_YES = $(if $(filter-out 0,$(YES)),--yes,)
 
 # --- the workspace-wide pair (what you type) ---------------------------------
 
@@ -116,6 +118,11 @@ wt-new: ## Cut NAME off latest origin/main in EVERY repo (re-run to rebase them 
 wt-rm: ## Remove worktree NAME from every repo that has it, and its .code-workspace (REPOS="…" narrows)
 	$(need-name)
 	@$(WORKSPACE) wt-set-rm "$(NAME)" $(WT_REPOS)
+
+# Every repo, like its `wt-rm` neighbour — a worktree set is cut across all of
+# them, so "all" that meant one repo left the rest behind.
+wt-rm-all: ## Remove EVERY worktree in EVERY repo: dir, branch, slot, window spec (prompts; REPOS="…" narrows, YES=1 skips the prompt)
+	@$(WORKSPACE) wt-rm-all $(WT_REPOS) $(WT_YES)
 
 # Kept because they read better when you are deliberately naming a few repos,
 # and because everything written before wt-new widened says it this way.
@@ -180,15 +187,6 @@ unstash: ## Restore this worktree's most recent stash entry (apply + drop, never
 	  ref=$$(git stash list --format='%gd %H' | grep " $$sha" | head -1 | cut -d' ' -f1); \
 	  if [ -n "$$ref" ]; then git stash drop "$$ref" >/dev/null; fi; \
 	  echo "[stash] restored and dropped '$(STASH_TAG)'"
-
-wt-rm-all: ## Remove ALL worktrees under THIS repo's .claude/worktrees/ (prompts to confirm)
-	@read -r -p "Remove ALL .claude/worktrees/* worktrees and their branches? [y/N] " ans; \
-	  if [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
-	    for w in $$(git worktree list --porcelain | awk '/^worktree /{print $$2}' | grep "/.claude/worktrees/" || true); do \
-	      name="$${w#*/.claude/worktrees/}"; echo "[wt-rm-all] removing $$name"; $(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$$name" rm || true; \
-	    done; \
-	    git worktree prune; echo "[wt-rm-all] done."; \
-	  else echo "[wt-rm-all] aborted"; fi
 
 # --- the workspace -----------------------------------------------------------
 #

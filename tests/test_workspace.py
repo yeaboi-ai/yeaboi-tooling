@@ -327,6 +327,19 @@ class TestWorktreeSets:
 
         assert workspace.worktrees(fleet / "alpha") == ["feature"]
 
+    def test_the_scan_stops_at_a_worktree_and_never_enters_it(self, fleet: Path) -> None:
+        """A dependency tree inside a worktree holds .git files of its own, and
+        walking them is both wrong (they are not names) and slow enough — minutes,
+        across five repos — to look like a hang."""
+        workspace.main(["--root", str(fleet), "setup"])
+        tree = fleet / "alpha" / ".claude" / "worktrees" / "feature"
+        vendored = tree / "node_modules" / "some-package"
+        vendored.mkdir(parents=True)
+        (tree / ".git").write_text("gitdir: elsewhere\n")
+        (vendored / ".git").write_text("gitdir: elsewhere\n")
+
+        assert workspace.worktrees(fleet / "alpha") == ["feature"]
+
     def test_removing_a_name_no_repo_has_says_so(self, fleet: Path, capsys: pytest.CaptureFixture) -> None:
         workspace.main(["--root", str(fleet), "setup"])
         capsys.readouterr()
@@ -489,6 +502,37 @@ class TestCuttingASet:
         assert not spec.exists()
 
 
+def _rm_stub(monkeypatch: pytest.MonkeyPatch, order: list[str] | None = None):
+    """Stand in for `make -C <repo> wt-one-rm`, doing what wt.sh's rm does:
+    the tree goes, and so do its empty parents. `order` records the names."""
+
+    def fake(args: list[str], cwd=None) -> tuple[bool, str]:
+        name = next(a.split("=", 1)[1] for a in args if a.startswith("NAME="))
+        if order is not None:
+            order.append(name)
+        home = Path(args[2]) / ".claude" / "worktrees"
+        shutil.rmtree(home / name, ignore_errors=True)
+        parent = (home / name).parent
+        while parent != home and home in parent.parents:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+        return True, f"[wt] removed worktree '{name}' (dir + branch)\n"
+
+    monkeypatch.setattr(workspace, "run_capture", fake)
+
+
+def _plant(fleet: Path, name: str, repos: tuple[str, ...] = ("alpha", "beta")) -> None:
+    """A worktree on disk that git registers nowhere — what a moved repo or a
+    half-finished removal leaves behind, and what `git worktree list` misses."""
+    for repo in repos:
+        tree = fleet / repo / ".claude" / "worktrees" / name
+        tree.mkdir(parents=True)
+        (tree / ".git").write_text("gitdir: elsewhere\n")
+
+
 class TestRemovingANestedSet:
     """wt-set-rm of a branch-shaped name — the spec nests, and so does the debris.
 
@@ -498,42 +542,15 @@ class TestRemovingANestedSet:
     home that may only go once NO repo still carries the name.
     """
 
-    @staticmethod
-    def _rm_stub(monkeypatch: pytest.MonkeyPatch):
-        """Stand in for `make -C <repo> wt-one-rm`, doing what wt.sh's rm does:
-        the tree goes, and so do its empty parents."""
-
-        def fake(args: list[str], cwd=None) -> tuple[bool, str]:
-            name = next(a.split("=", 1)[1] for a in args if a.startswith("NAME="))
-            home = Path(args[2]) / ".claude" / "worktrees"
-            shutil.rmtree(home / name, ignore_errors=True)
-            parent = (home / name).parent
-            while parent != home and home in parent.parents:
-                try:
-                    parent.rmdir()
-                except OSError:
-                    break
-                parent = parent.parent
-            return True, f"[wt] removed worktree '{name}' (dir + branch)\n"
-
-        monkeypatch.setattr(workspace, "run_capture", fake)
-
-    @staticmethod
-    def _plant(fleet: Path, name: str, repos: tuple[str, ...] = ("alpha", "beta")) -> None:
-        for repo in repos:
-            tree = fleet / repo / ".claude" / "worktrees" / name
-            tree.mkdir(parents=True)
-            (tree / ".git").write_text("gitdir: elsewhere\n")
-
     def test_the_nested_spec_and_its_empty_parent_go_together(
         self, fleet: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         workspace.main(["--root", str(fleet), "setup"])
-        self._plant(fleet, "desktop/feature")
+        _plant(fleet, "desktop/feature")
         spec = fleet / ".worktrees" / "desktop" / "feature.code-workspace"
         spec.parent.mkdir(parents=True)
         spec.write_text("{}\n")
-        self._rm_stub(monkeypatch)
+        _rm_stub(monkeypatch)
 
         code = workspace.main(["--root", str(fleet), "wt-set-rm", "desktop/feature"])
 
@@ -544,13 +561,13 @@ class TestRemovingANestedSet:
 
     def test_a_sibling_set_keeps_the_shared_parent(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         workspace.main(["--root", str(fleet), "setup"])
-        self._plant(fleet, "desktop/feature")
+        _plant(fleet, "desktop/feature")
         spec = fleet / ".worktrees" / "desktop" / "feature.code-workspace"
         spec.parent.mkdir(parents=True)
         spec.write_text("{}\n")
         sibling = fleet / ".worktrees" / "desktop" / "other.code-workspace"
         sibling.write_text("{}\n")
-        self._rm_stub(monkeypatch)
+        _rm_stub(monkeypatch)
 
         assert workspace.main(["--root", str(fleet), "wt-set-rm", "desktop/feature"]) == 0
 
@@ -561,16 +578,150 @@ class TestRemovingANestedSet:
         self, fleet: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         workspace.main(["--root", str(fleet), "setup"])
-        self._plant(fleet, "desktop/feature")
+        _plant(fleet, "desktop/feature")
         home = workspace.wt_slots.home_for("desktop/feature")
         home.mkdir(parents=True)
-        self._rm_stub(monkeypatch)
+        _rm_stub(monkeypatch)
 
         assert workspace.main(["--root", str(fleet), "wt-set-rm", "desktop/feature", "--repos", "alpha"]) == 0
         assert home.is_dir(), "beta still carries the name — its shared state went anyway"
 
         assert workspace.main(["--root", str(fleet), "wt-set-rm", "desktop/feature"]) == 0
         assert not home.exists()
+
+
+class TestRemovingEveryWorktree:
+    """wt-rm-all — every worktree in every repo, and an honest exit code.
+
+    The removals themselves are stubbed (TestRemovingANestedSet's stub); what
+    this class owns is which trees are found, in what order they go, and what a
+    survivor does to the exit code.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _stay_put(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The command chdirs the process, so every case here must have its cwd
+        restored — otherwise the next test runs from this one's tmp_path."""
+        monkeypatch.chdir(tmp_path)
+
+    @staticmethod
+    def _answer(monkeypatch: pytest.MonkeyPatch, reply: str) -> None:
+        """A terminal that says `reply` at the prompt."""
+
+        class Tty:
+            @staticmethod
+            def isatty() -> bool:
+                return True
+
+        monkeypatch.setattr(workspace.sys, "stdin", Tty())
+        monkeypatch.setattr("builtins.input", lambda prompt="": reply)
+
+    def test_it_removes_a_tree_git_registers_nowhere(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "left-behind")
+        _rm_stub(monkeypatch)
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 0
+        for repo in ("alpha", "beta"):
+            assert not (fleet / repo / ".claude" / "worktrees" / "left-behind").exists()
+
+    def test_it_reaches_every_repo_and_every_name(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "shared")
+        _plant(fleet, "desktop/feature", repos=("beta",))
+        _rm_stub(monkeypatch)
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 0
+        for repo in ("alpha", "beta"):
+            assert workspace.worktrees(fleet / repo) == []
+
+    def test_the_tree_you_are_standing_in_goes_last(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Removing it first deletes this process's cwd, and every `make -C`
+        after that runs from a directory that no longer exists."""
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "aaa-first")
+        _plant(fleet, "zzz-here")
+        order: list[str] = []
+        _rm_stub(monkeypatch, order)
+        monkeypatch.chdir(fleet / "alpha" / ".claude" / "worktrees" / "zzz-here")
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 0
+        assert order[-1] == "zzz-here", order
+        assert "cd somewhere that still exists" in capsys.readouterr().out
+
+    def test_a_survivor_is_named_and_fails_the_run(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The old recipe swallowed every failure and always said 'done.'"""
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "stuck")
+        monkeypatch.setattr(workspace, "run_capture", lambda args, cwd=None: (False, "[wt] boom\n"))
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 1
+        assert "make wt-rm NAME=stuck" in capsys.readouterr().out
+
+    def test_repos_narrows_it(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "shared")
+        _rm_stub(monkeypatch)
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes", "--repos", "alpha"]) == 0
+        assert workspace.worktrees(fleet / "alpha") == []
+        assert workspace.worktrees(fleet / "beta") == ["shared"]
+
+    def test_it_removes_nothing_without_a_terminal_to_confirm_at(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "shared")
+        _rm_stub(monkeypatch)
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all"]) == 1
+        assert workspace.worktrees(fleet / "alpha") == ["shared"]
+
+    def test_no_at_the_prompt_removes_nothing(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "shared")
+        _rm_stub(monkeypatch)
+        self._answer(monkeypatch, "n")
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all"]) == 0
+        assert "aborted" in capsys.readouterr().out
+        assert workspace.worktrees(fleet / "alpha") == ["shared"]
+
+    def test_yes_at_the_prompt_removes_them(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "shared")
+        _rm_stub(monkeypatch)
+        self._answer(monkeypatch, "y")
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all"]) == 0
+        assert workspace.worktrees(fleet / "alpha") == []
+
+    def test_a_reported_failure_fails_the_run_even_with_the_disk_clean(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The branch, the slot and the window spec outlive a scan of the disk."""
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "shared")
+        order: list[str] = []
+        _rm_stub(monkeypatch, order)
+        removes = workspace.run_capture
+        monkeypatch.setattr(workspace, "run_capture", lambda args, cwd=None: (False, removes(args)[1]))
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 1
+        assert workspace.worktrees(fleet / "alpha") == []
+        assert "reported a problem: shared" in capsys.readouterr().out
+
+    def test_an_empty_workspace_is_not_a_failure(self, fleet: Path, capsys: pytest.CaptureFixture) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 0
+        assert "no worktrees" in capsys.readouterr().out
 
 
 class TestTheNightly:

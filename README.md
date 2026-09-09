@@ -92,6 +92,7 @@ make wt-new NAME=poker-export HEADLESS=1                # cut them, open no edit
 make wt-new NAME=poker-export                           # again: rebase them all onto origin/main
 make wt-sets                                            # what is cut where
 make wt-rm NAME=poker-export                            # every repo that has it
+make wt-rm-all                                          # every worktree there is (prompts; YES=1 skips)
 ```
 
 Each repo branches `<name>` off freshly fetched `origin/main`, always as a **new** branch — an
