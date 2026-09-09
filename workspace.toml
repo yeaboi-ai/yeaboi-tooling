@@ -47,6 +47,16 @@ vendors = true
 holds = "yeaboi.ai — flat HTML served off main by Pages, so merging is publishing"
 
 [[repo]]
+name = "sandbox"
+dir = "yeaboi-sandbox"
+url = "https://github.com/yeaboi-ai/yeaboi-sandbox.git"
+toolchain = "python"
+# vendors contracts/v1/connectors.json from yeaboi.ai, so the nightly re-syncs
+# it and this repo's parity test is what notices a connector added on main.
+vendors = true
+holds = "the real seeded vendor tenants every connector is asserted against"
+
+[[repo]]
 name = "tooling"
 dir = "yeaboi-tooling"
 url = "https://github.com/yeaboi-ai/yeaboi-tooling.git"
