@@ -91,7 +91,7 @@ class TestTheReader:
 
 class TestTheManifest:
     def test_it_names_every_repo_in_the_fleet(self) -> None:
-        assert {r.name for r in workspace.repos()} == {"yeaboi", "frontend", "desktop", "site", "tooling"}
+        assert {r.name for r in workspace.repos()} == {"yeaboi", "frontend", "desktop", "site", "tooling", "sandbox"}
 
     def test_every_row_is_complete_and_distinct(self) -> None:
         repos = workspace.repos()
@@ -117,14 +117,17 @@ class TestTheManifest:
             "yeaboi-ai/yeaboi-desktop",
             "yeaboi-ai/yeaboi-site",
             "yeaboi-ai/yeaboi-tooling",
+            "yeaboi-ai/yeaboi-sandbox",
         }
 
-    def test_the_repos_that_vendor_a_contract_are_the_two_downstream_ones(self) -> None:
-        """The nightly's matrix. yeaboi is upstream of both and vendors nothing;
-        the tooling repo is consumed by sha, not by contract; and desktop
-        GENERATES its routes manifest rather than vendoring one, so re-vendoring
-        it there would fight the generator that owns the file."""
-        assert {r.name for r in workspace.repos() if r.vendors} == {"frontend", "site"}
+    def test_the_repos_that_vendor_a_contract_are_the_downstream_ones(self) -> None:
+        """The nightly's matrix. yeaboi is upstream of all of them and vendors
+        nothing; the tooling repo is consumed by sha, not by contract; and
+        desktop GENERATES its routes manifest rather than vendoring one, so
+        re-vendoring it there would fight the generator that owns the file.
+        sandbox vendors the connector catalog, which is what makes the nightly
+        the thing that notices a connector added on yeaboi's main."""
+        assert {r.name for r in workspace.repos() if r.vendors} == {"frontend", "site", "sandbox"}
 
     def test_the_matrix_command_emits_what_the_nightly_indexes(self) -> None:
         out = subprocess.run([sys.executable, str(SCRIPT), "matrix"], capture_output=True, text=True, check=True).stdout
