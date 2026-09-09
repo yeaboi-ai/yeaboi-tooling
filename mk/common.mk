@@ -67,7 +67,7 @@ include $(TOOLING)/mk/clip.mk
 TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate demo
 
 .PHONY: wt-repair stash stash-list unstash \
-	wt-new wt-rm wt-rm-all wt-set wt-set-rm wt-sets wt-siblings \
+	wt-new wt-rm wt-rm-all wt-set wt-set-rm wt-sets wt-siblings wt-doctor \
         wt-one wt-one-rm wt-open wt-headless wt-issue wt-list \
         workspace-setup workspace-status workspace-env \
         tooling-sync tooling-bump tooling-check contracts-sync contracts-check
@@ -131,6 +131,12 @@ wt-set-rm: wt-rm ## Alias for wt-rm
 
 wt-sets: ## Which worktree names exist in which repos (a name in several is a set)
 	@$(WORKSPACE) wt-sets
+
+# Every `wt-new` already does this first; the target is for the tree that is
+# ALREADY sharing a port with a neighbour, where cutting a new one to fix it
+# would be an odd thing to have to do.
+wt-doctor: ## Repair port/slot drift: reseat every worktree on a block of its own and rewrite the drifted .worktree.env files
+	@$(WORKSPACE) wt-doctor
 
 wt-siblings: ## Which repos carry worktree NAME, and what each still owes (exit 1 if any does)
 	@$(WORKSPACE) wt-siblings "$(NAME)"

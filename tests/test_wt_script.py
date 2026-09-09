@@ -520,14 +520,23 @@ class TestPortBlock:
         assert _run_wt(repo, "feat-x", env).returncode == 0
         assert not (repo / ".worktree.env").exists()
 
-    def test_rm_frees_the_slot_for_the_next_worktree(self, repo: Path, env: dict[str, str]) -> None:
+    def test_rm_leaves_the_slot_alone_for_the_repos_it_cannot_see(self, repo: Path, env: dict[str, str]) -> None:
+        """A single-repo rm must NOT free the slot — the same name is cut in
+        every repo, and the siblings still on disk still hold a .worktree.env
+        pinned to it. Freeing it here handed a live tree's vite port to the
+        next cut. Only workspace.py, which can see every repo, releases it."""
+        import json
+
         assert _run_wt(repo, "feat-a", env).returncode == 0
-        first = (repo / ".claude" / "worktrees" / "feat-a" / ".worktree.env").read_text()
+        registry = Path(env["YEABOI_WT_SLOTS_FILE"])
+        slot = json.loads(registry.read_text())["feat-a"]
+
         assert _run_wt(repo, "feat-a", env, action="rm").returncode == 0
+
+        assert json.loads(registry.read_text()).get("feat-a") == slot
         assert _run_wt(repo, "feat-b", env).returncode == 0
-        assert (repo / ".claude" / "worktrees" / "feat-b" / ".worktree.env").read_text().replace(
-            "feat-b", "feat-a"
-        ) == first
+        body = (repo / ".claude" / "worktrees" / "feat-b" / ".worktree.env").read_text()
+        assert f"export YEABOI_WT_SLOT={slot}\n" not in body
 
     def test_repair_gives_an_existing_worktree_a_block(self, repo: Path, env: dict[str, str]) -> None:
         """The retrofit path for worktrees cut before slots existed."""

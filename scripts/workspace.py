@@ -517,6 +517,137 @@ def open_workspace(path: Path, name: str) -> bool:
     return True
 
 
+def wt_env_path(root: Path, repo: Repo, name: str) -> Path:
+    return root / repo.dir / ".claude" / "worktrees" / name / ".worktree.env"
+
+
+def slot_claims(root: Path) -> dict[str, dict[str, int]]:
+    """What every worktree on disk claims: {name: {repo.dir: slot}}.
+
+    ALWAYS every repo in the manifest, never a --repos narrowing: a slot is a
+    machine-wide resource, and a name the narrowed selection cannot see is
+    still holding its ports.
+    """
+    claims: dict[str, dict[str, int]] = {}
+    for repo in repos():
+        for name in worktrees(root / repo.dir):
+            claim = wt_slots.read_claim(wt_env_path(root, repo, name))
+            if claim is None:
+                continue
+            # A file naming a DIFFERENT tree is a copied or renamed worktree: it
+            # also points YEABOI_HOME at the other tree's data. Recorded as a
+            # slot this name does not coherently hold, so it is rewritten.
+            claims.setdefault(name, {})[repo.dir] = claim[1] if claim[0] == name else -claim[1]
+    return claims
+
+
+def unclaimed(root: Path) -> list[tuple[str, str]]:
+    """(repo.dir, name) for every worktree on disk carrying no .worktree.env.
+
+    Cut before slots existed, so it is still falling back to the shared 5173 and
+    colliding with the main checkout — invisible to reconcile, which can only
+    weigh the claims that exist.
+    """
+    return [
+        (repo.dir, name)
+        for repo in repos()
+        for name in worktrees(root / repo.dir)
+        if wt_slots.read_claim(wt_env_path(root, repo, name)) is None
+    ]
+
+
+def sync_slots(root: Path, gc: bool = False) -> dict[str, int]:
+    """Make the registry — and every drifted .worktree.env — agree with the disk.
+
+    Two things put them out of step, and both end the same way: two live
+    worktrees on one port, and a vite that dies with "Port NNNNN is already in
+    use". A name can lose its registry entry (an older tooling released it from
+    one repo while four siblings still held it), and one name's five env files
+    can disagree with each other (a repair reached one repo and not the rest).
+
+    Disk wins for a name that agrees with itself, because those ports may
+    already be listening. The rest are moved to a free slot and REWRITTEN — the
+    registry alone changes nothing, since mk/common.mk includes the file, not
+    the registry. Returns {name: slot} for every tree whose file was rewritten,
+    which is what the caller tells the user to restart.
+
+    `gc` is passed straight through to reconcile; see there for why a cut must
+    not ask for it.
+
+    Best-effort throughout: a slot is a shared machine resource, and `wt-new`
+    calls this before it cuts anything. An unreadable worktree must not be the
+    reason a feature does not get branched.
+    """
+    try:
+        claims = slot_claims(root)
+        # A name whose repos disagree has no claim to honour; min() of their
+        # absolute values picks one so the result is deterministic, and
+        # reconcile then treats it like any other.
+        settled = {name: min(abs(s) for s in per.values()) for name, per in claims.items()}
+        # Disagreeing repos, or a file naming another tree (recorded negative).
+        split = {
+            name for name, per in claims.items() if len(set(per.values())) > 1 or any(slot < 0 for slot in per.values())
+        }
+        moved = wt_slots.reconcile(settled, unsettled=split, gc=gc)
+
+        # A split name is rewritten even when reconcile left its slot alone: the
+        # repos that disagreed still carry the wrong number on disk. So the
+        # return value is every file touched, not only what reconcile re-slotted
+        # — telling the user "nothing changed" after moving beta's ports from
+        # 20900 to 20300 is how a repair loses their trust.
+        rewritten: dict[str, int] = {}
+        for name in sorted(set(moved) | split):
+            slot = moved.get(name, settled[name])
+            for repo in repos():
+                path = wt_env_path(root, repo, name)
+                if not path.parent.is_dir():
+                    continue
+                path.write_text("\n".join(wt_slots.env_lines(name, slot)) + "\n", encoding="utf-8")
+            rewritten[name] = slot
+            was = sorted({abs(s) for s in claims[name].values()})
+            if was == [slot]:
+                print(f"[workspace] '{name}' settled on slot {slot} — its repos disagreed")
+            else:
+                shown = ", ".join(map(str, was))
+                print(f"[workspace] '{name}' moved off slot {shown} to {slot} — its ports changed")
+        return rewritten
+    except Exception as exc:  # a shared machine resource; never block the caller on it
+        print(f"[workspace] note: could not reconcile worktree slots ({exc})")
+        return {}
+
+
+def cmd_wt_doctor(args: argparse.Namespace) -> int:
+    """Repair port/slot drift across the workspace, without cutting anything.
+
+    The one caller that asks reconcile to collect: a human runs this
+    deliberately, with no cut mid-fan-out to have its slot taken out from
+    under it.
+    """
+    root = workspace_root(args.root)
+    moved = sync_slots(root, gc=True)
+
+    # Reconcile can only weigh claims that exist, so a tree cut before slots
+    # existed is invisible to it — and is the one actually sharing 5173 with the
+    # main checkout. Give it the file it never got.
+    for repo_dir, name in unclaimed(root):
+        try:
+            slot = wt_slots.allocate(name)
+            path = root / repo_dir / ".claude" / "worktrees" / name / ".worktree.env"
+            path.write_text("\n".join(wt_slots.env_lines(name, slot)) + "\n", encoding="utf-8")
+        except Exception as exc:
+            print(f"[workspace] note: could not give '{name}' a slot in {repo_dir} ({exc})")
+            continue
+        print(f"[workspace] '{name}' had no slot in {repo_dir} — gave it {slot}")
+        moved[name] = slot
+
+    if not moved:
+        print(f"[workspace] every worktree under {root} has a slot of its own")
+        return 0
+    print()
+    print(f"[workspace] {len(moved)} worktree(s) re-slotted — restart any dev server running in them")
+    return 0
+
+
 def cmd_wt_set(args: argparse.Namespace) -> int:
     root = workspace_root(args.root)
     # No --repos means the whole workspace. That is the common case and the
@@ -540,6 +671,11 @@ def cmd_wt_set(args: argparse.Namespace) -> int:
     # Claim the port/state slot once, here, rather than letting five parallel
     # wt.sh runs each race for it — they must all agree on one number, because
     # one feature's five worktrees are developed together.
+    # Before claiming anything: make the registry agree with what the live
+    # worktrees are already using, so the number handed out below cannot be one
+    # of theirs. Without it a name whose registry entry went missing is
+    # invisible here, and the cut takes the port its dev server is serving on.
+    sync_slots(root)
     try:
         slot = wt_slots.allocate(args.name)
         print(f"[workspace] '{args.name}' is slot {slot} — its own ports and ~/.yeaboi in every repo")
@@ -785,7 +921,12 @@ def cmd_wt_set_rm(args: argparse.Namespace) -> int:
     # only go once NO repo carries the name — scanned across ALL repos, not
     # just the --repos selection, so a narrowed removal never deletes a home
     # the un-narrowed repos still use.
+    # The slot goes under the same guard and for the same reason: the sibling
+    # worktrees' .worktree.env files still pin it, and make reads those, so a
+    # slot freed while one repo still carries the name gets handed to the next
+    # `wt-new` while a live tree is still serving on its ports.
     if not any(args.name in worktrees(root / r.dir) for r in repos()):
+        wt_slots.release(args.name)
         if wt_slots.purge_home(args.name):
             print(f"[workspace] removed data home {wt_slots.home_for(args.name)}")
     print(f"[workspace] removed '{args.name}' from: {', '.join(removed)}")
@@ -815,6 +956,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("wt-sets", help="which worktree names exist in which repos")
 
+    sub.add_parser("wt-doctor", help="repair port/slot drift between the registry and the live worktrees")
+
     sibs = sub.add_parser("wt-siblings", help="which repos carry this worktree name, and what each still owes")
     sibs.add_argument("name")
 
@@ -834,6 +977,7 @@ def main(argv: list[str] | None = None) -> int:
         "matrix": cmd_matrix,
         "wt-set": cmd_wt_set,
         "wt-sets": cmd_wt_sets,
+        "wt-doctor": cmd_wt_doctor,
         "wt-siblings": cmd_wt_siblings,
         "wt-set-rm": cmd_wt_set_rm,
         "wt-rm-all": cmd_wt_rm_all,

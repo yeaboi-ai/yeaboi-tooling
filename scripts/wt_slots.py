@@ -190,6 +190,93 @@ def purge_home(name: str) -> bool:
     return True
 
 
+def read_claim(env_path: Path) -> tuple[str, int] | None:
+    """The (name, slot) a worktree's .worktree.env claims, or None if it makes no claim.
+
+    The file on disk is what `make dev` actually reads — mk/common.mk includes
+    it — so it, not the registry, is the truth about which ports a live tree is
+    already using. reconcile() exists to make the registry agree with it.
+    """
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except (OSError, ValueError):  # ValueError covers a file that is not UTF-8
+        return None
+    name = re.search(r"^export YEABOI_WT_NAME=(.+)$", text, re.M)
+    slot = re.search(r"^export YEABOI_WT_SLOT=(\d+)$", text, re.M)
+    if not name or not slot:
+        return None
+    number = int(slot.group(1))
+    if not 1 <= number <= MAX_SLOT:
+        return None
+    return name.group(1).strip(), number
+
+
+def reconcile(claims: dict[str, int], unsettled: set[str] | None = None, gc: bool = False) -> dict[str, int]:
+    """Re-seat the registry on what the live worktrees claim; return the names that moved.
+
+    `claims` is every worktree found on disk, mapped to the slot its
+    .worktree.env pins. Disk wins, because a live tree is already listening on
+    those ports — handing its slot to a new name is what made two worktrees
+    fight over one vite port. So: every live name keeps its claim, names not
+    live are dropped (their slot is genuinely free again), and the loser of a
+    collision between two live claims is moved to a free slot.
+
+    `unsettled` names the trees whose own repos disagree about their slot. They
+    lose every collision: a name pinned to two different numbers is not serving
+    coherently on either, while the name it collides with is pinned to one and
+    may well be serving on it right now.
+
+    `gc` drops registry entries no live worktree claims. OFF by default, and
+    that default is load-bearing: this registry is machine-wide while `claims`
+    comes from scanning ONE workspace root, and a cut allocates its slot before
+    its worktrees exist on disk to be scanned. Dropping the unclaimed would
+    therefore free another root's slots, and would let a second `wt-new` take
+    the number a first one is still mid-fan-out with — the very race the single
+    up-front allocation exists to avoid. Only `wt-doctor`, which a human runs
+    deliberately and alone, asks for the collection.
+
+    The return value is {name: new_slot} for the moved ones ONLY, which is the
+    caller's cue to rewrite those trees' .worktree.env — the registry alone
+    changes nothing, since make reads the file.
+    """
+    path = registry_path()
+    with _Lock(path.with_suffix(".lock")):
+        # A name with no live claim keeps its slot unless a live one wants it:
+        # it may be a cut still fanning out, or a tree in another workspace
+        # root. `gc` is what actually reclaims those.
+        table: dict[str, int] = {} if gc else {n: s for n, s in _read(path).items() if n not in claims}
+        moved: dict[str, int] = {}
+        # Coherent claims are seated first, so a name pinned to one slot beats
+        # one pinned to two. Past that the order is alphabetical: arbitrary,
+        # but the same on every machine and on every re-run.
+        blurred = unsettled or set()
+        order = sorted(claims, key=lambda n: (n in blurred, n))
+        for position, name in enumerate(order):
+            wanted = claims[name]
+            holder = next((n for n, slot in table.items() if slot == wanted), None)
+            if holder is None:
+                table[name] = wanted
+                continue
+            # A live claim outranks a mere registry entry, which is serving
+            # nothing here: evict it rather than moving the tree on the ports.
+            if holder not in claims:
+                del table[holder]
+                table[name] = wanted
+                continue
+            # A slot a not-yet-seated coherent claim is going to take is NOT
+            # free. Ignoring that walked this name straight onto the ports of a
+            # tree that was in conflict with nobody — the bug this whole change
+            # is about, re-created by its own repair.
+            spoken_for = {claims[n] for n in order[position + 1 :] if n not in blurred}
+            taken = set(table.values()) | spoken_for
+            free = next((n for n in range(1, MAX_SLOT + 1) if n not in taken), 0)
+            if free == 0:
+                raise RuntimeError(f"no free worktree slot below {MAX_SLOT}; run `make wt-list` and clean up")
+            table[name] = moved[name] = free
+        _write(path, table)
+        return moved
+
+
 def get(name: str) -> int | None:
     return _read(registry_path()).get(name)
 
