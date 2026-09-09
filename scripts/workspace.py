@@ -376,12 +376,25 @@ def worktrees(path: Path) -> list[str]:
     home = path / ".claude" / "worktrees"
     if not home.is_dir():
         return []
-    found = set()
-    for git in home.rglob(".git"):
-        name = git.parent.relative_to(home)
-        if TOOLING_DIR in name.parts:
+    # Descending no further than the first `.git` is what keeps this off every
+    # node_modules and .venv in the workspace — a walk of the whole tree takes
+    # minutes. A nested name's parent holds no `.git`, so nesting still works;
+    # the depth cap covers the tree whose `.git` went but whose node_modules
+    # stayed, where there is no `.git` to stop at.
+    found, stack = [], [(home, 0)]
+    while stack:
+        current, depth = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:  # unreadable, or removed while we walked — not a name either way
             continue
-        found.add(name.as_posix())
+        for entry in entries:
+            if entry.name == TOOLING_DIR or entry.is_symlink() or not entry.is_dir():
+                continue
+            if (entry / ".git").exists():
+                found.append(entry.relative_to(home).as_posix())
+            elif depth + 1 < MAX_NAME_DEPTH:
+                stack.append((entry, depth + 1))
     return sorted(found)
 
 
@@ -400,6 +413,9 @@ def worktrees(path: Path) -> list[str]:
 # one claude session — not one per root, five of them racing for the terminal.
 
 TOOLING_DIR = ".tooling"
+# Segments a worktree name may have. It is a branch name — one or two in
+# practice — and the cap is what bounds the scan below.
+MAX_NAME_DEPTH = 3
 WT_SETS_DIR = ".worktrees"
 
 
@@ -648,6 +664,83 @@ def cmd_wt_siblings(args: argparse.Namespace) -> int:
     return 0
 
 
+def standing_in(root: Path, chosen: list[Repo], names: list[str]) -> str | None:
+    """The worktree name the caller is standing in, if any.
+
+    Removing it pulls the ground out from under this process, so it goes last.
+    Longest name first: 'desktop/feature' contains a cwd that 'desktop' would
+    also claim.
+    """
+    try:
+        cwd = Path.cwd().resolve()
+    except OSError:  # the cwd was already deleted by something else
+        return None
+    for name in sorted(names, key=len, reverse=True):
+        for repo in chosen:
+            tree = (root / repo.dir / ".claude" / "worktrees" / name).resolve()
+            if tree == cwd or tree in cwd.parents:
+                return name
+    return None
+
+
+def cmd_wt_rm_all(args: argparse.Namespace) -> int:
+    """Every worktree in every repo, not only the ones git still registers.
+
+    `git worktree list` misses a tree whose registration was pruned or whose
+    repo moved, and those are exactly the ones left behind by a failed removal.
+    `worktrees()` walks the disk instead, so they are visible here and each one
+    goes through the same wt-set-rm as a healthy one.
+    """
+    root = workspace_root(args.root)
+    chosen = repos() if not args.repos else select(args.repos.split())
+    carried = {repo.name: worktrees(root / repo.dir) for repo in chosen}
+    names = sorted({name for held in carried.values() for name in held})
+    if not names:
+        print(f"[workspace] no worktrees under {root}")
+        return 0
+
+    print(f"[workspace] {len(names)} worktree name(s) in {', '.join(r.name for r in chosen)}:")
+    for name in names:
+        carriers = [repo for repo, held in carried.items() if name in held]
+        print(f"[workspace]   {name} ({', '.join(carriers)})")
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("[workspace] nothing removed — there is no terminal to confirm at; re-run with YES=1")
+            return 1
+        if input("Remove ALL of them, and their branches? [y/N] ").strip().lower() != "y":
+            print("[workspace] aborted")
+            return 0
+
+    here = standing_in(root, chosen, names)
+    if here:
+        names = [name for name in names if name != here] + [here]
+    # The loop deletes directories this process may be sitting in, and every
+    # later `make -C` would then run from a cwd that no longer exists.
+    os.chdir(root)
+
+    failed = []
+    for name in names:
+        if cmd_wt_set_rm(argparse.Namespace(root=str(root), name=name, repos=args.repos)) != 0:
+            failed.append(name)
+
+    left = [(repo.name, name) for repo in chosen for name in worktrees(root / repo.dir)]
+    print()
+    if here and not left:
+        print(f"[workspace] '{here}' was the tree you are standing in — cd somewhere that still exists")
+    if left:
+        print(f"[workspace] {len(left)} worktree(s) survived — remove them by name:")
+        for repo_name, name in left:
+            print(f"[workspace]   {repo_name}: make wt-rm NAME={name}")
+        return 1
+    # A branch, a slot or a window spec can survive a removal the disk scan
+    # calls clean, so a reported failure fails the run on its own.
+    if failed:
+        print(f"[workspace] nothing was left on disk, but these reported a problem: {', '.join(failed)}")
+        return 1
+    print(f"[workspace] removed {len(names)} worktree name(s) from: {', '.join(r.name for r in chosen)}")
+    return 0
+
+
 def cmd_wt_set_rm(args: argparse.Namespace) -> int:
     root = workspace_root(args.root)
     chosen = repos() if not args.repos else select(args.repos.split())
@@ -729,6 +822,10 @@ def main(argv: list[str] | None = None) -> int:
     drop.add_argument("name")
     drop.add_argument("--repos", help="space-separated (default: every repo that has it)")
 
+    drop_all = sub.add_parser("wt-rm-all", help="remove EVERY worktree in every repo (dir, branch, slot, window spec)")
+    drop_all.add_argument("--repos", help="space-separated (default: every repo)")
+    drop_all.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+
     args = parser.parse_args(argv)
     handlers = {
         "setup": cmd_setup,
@@ -739,6 +836,7 @@ def main(argv: list[str] | None = None) -> int:
         "wt-sets": cmd_wt_sets,
         "wt-siblings": cmd_wt_siblings,
         "wt-set-rm": cmd_wt_set_rm,
+        "wt-rm-all": cmd_wt_rm_all,
     }
     return handlers[args.command](args)
 
