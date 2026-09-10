@@ -93,6 +93,7 @@ make wt-new NAME=poker-export                           # again: rebase them all
 make wt-sets                                            # what is cut where
 make wt-rm NAME=poker-export                            # every repo that has it
 make wt-rm-all                                          # every worktree there is (prompts; YES=1 skips)
+make wt-doctor                                          # two worktrees fighting over a port? this
 ```
 
 Each repo branches `<name>` off freshly fetched `origin/main`, always as a **new** branch — an
@@ -104,6 +105,14 @@ with a note; `/sync-main` in that worktree is where you finish the job.
 Run it from any repo in the workspace. The window's file lands in `<workspace>/.worktrees/` beside
 the repos, because it names paths in all of them. `make wt-one NAME=…` is the single-repo cut when
 you really do want one.
+
+Every worktree name owns a **slot**: a block of 100 ports and a private `YEABOI_HOME`, written into
+`<worktree>/.worktree.env` and included by every Makefile. That file is what `make dev` reads, so it
+— not the registry in `~/.yeaboi/worktree-slots.json` — is the truth about which ports a tree is
+using. `wt-new` reconciles the two before it claims anything, so a cut can never take a block a live
+worktree is already serving on; `make wt-doctor` does the same reconciliation on its own, for a tree
+that is *already* colliding, and rewrites the `.worktree.env` files it moves. Restart any `make dev`
+running in a tree it moved.
 
 Nothing records a "set": a recorded one goes stale the moment somebody removes a worktree by hand,
 and the truth is a directory listing. **Ship upstream first** — the `yeaboi` PR merges, then the

@@ -798,3 +798,167 @@ class TestWorktreeSiblings:
         workspace.main(["--root", str(fleet), "setup"])
         capsys.readouterr()
         assert workspace.main(["--root", str(fleet), "wt-siblings", "never-cut"]) == 0
+
+
+class TestSlotsAcrossTheWorkspace:
+    """One name, five repos, one slot — and the ports only one of them can hold.
+
+    `.worktree.env` is what mk/common.mk includes, so it, not the registry, is
+    what a running `make dev` obeys. Every property here is about the two not
+    drifting apart, because when they do the symptom lands in an innocent
+    worktree as "Port 20762 is already in use".
+    """
+
+    @pytest.fixture(autouse=True)
+    def registry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        path = tmp_path / "slots.json"
+        monkeypatch.setenv("YEABOI_WT_SLOTS_FILE", str(path))
+        return path
+
+    def _claim(self, fleet: Path, name: str, slot: int, repos: tuple[str, ...] = ("alpha", "beta")) -> None:
+        """A worktree on disk pinned to a slot — what wt.sh leaves behind."""
+        _plant(fleet, name, repos)
+        for repo in repos:
+            tree = fleet / repo / ".claude" / "worktrees" / name
+            body = "\n".join(workspace.wt_slots.env_lines(name, slot)) + "\n"
+            (tree / ".worktree.env").write_text(body)
+
+    def _slot_on_disk(self, fleet: Path, repo: str, name: str) -> int | None:
+        claim = workspace.wt_slots.read_claim(fleet / repo / ".claude" / "worktrees" / name / ".worktree.env")
+        return None if claim is None else claim[1]
+
+    def test_a_cut_never_takes_a_slot_a_live_worktree_is_serving_on(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        # The registry forgot this tree — an older per-repo rm freed it while
+        # its siblings stayed — but its dev server is still on slot 1's ports.
+        self._claim(fleet, "settings-page", 1)
+        TestCuttingASet._stub(monkeypatch, [])
+
+        workspace.main(["--root", str(fleet), "wt-set", "polish", "--headless"])
+
+        assert workspace.wt_slots.get("polish") != 1
+        assert workspace.wt_slots.get("settings-page") == 1, "the live tree keeps what it is using"
+
+    def test_removing_from_one_repo_leaves_the_siblings_slot_alone(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._claim(fleet, "half-gone", 4)
+        workspace.wt_slots.reconcile({"half-gone": 4})
+        _rm_stub(monkeypatch)
+
+        workspace.main(["--root", str(fleet), "wt-set-rm", "half-gone", "--repos", "alpha"])
+
+        assert workspace.wt_slots.get("half-gone") == 4, "beta still carries the name and its ports"
+
+    def test_the_last_repo_to_let_go_gives_the_slot_back(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._claim(fleet, "all-done", 4)
+        workspace.wt_slots.reconcile({"all-done": 4})
+        _rm_stub(monkeypatch)
+
+        workspace.main(["--root", str(fleet), "wt-set-rm", "all-done"])
+
+        assert workspace.wt_slots.get("all-done") is None
+
+    def test_the_doctor_rewrites_the_file_make_actually_reads(self, fleet: Path) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._claim(fleet, "first", 6)
+        self._claim(fleet, "second", 6)
+
+        assert workspace.main(["--root", str(fleet), "wt-doctor"]) == 0
+
+        moved = self._slot_on_disk(fleet, "alpha", "second")
+        assert moved != 6, "the registry alone would have changed nothing"
+        assert self._slot_on_disk(fleet, "beta", "second") == moved, "every repo of a set agrees"
+        assert self._slot_on_disk(fleet, "alpha", "first") == 6
+
+    def test_the_doctor_settles_repos_that_disagree_with_each_other(self, fleet: Path) -> None:
+        # A repair that reached one repo and not the rest: same name, two slots.
+        workspace.main(["--root", str(fleet), "setup"])
+        self._claim(fleet, "split", 3, repos=("alpha",))
+        self._claim(fleet, "split", 9, repos=("beta",))
+
+        workspace.main(["--root", str(fleet), "wt-doctor"])
+
+        assert self._slot_on_disk(fleet, "alpha", "split") == self._slot_on_disk(fleet, "beta", "split")
+
+    def test_a_narrowed_cut_still_sees_a_claim_only_the_other_repo_holds(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A slot is machine-wide, so REPOS= must not narrow the scan — a tree
+        the selection cannot see is still holding its ports."""
+        workspace.main(["--root", str(fleet), "setup"])
+        self._claim(fleet, "beta-only", 1, repos=("beta",))
+        TestCuttingASet._stub(monkeypatch, [])
+
+        workspace.main(["--root", str(fleet), "wt-set", "fresh", "--repos", "alpha", "--headless"])
+
+        assert workspace.wt_slots.get("fresh") != 1
+
+    def test_a_split_only_repair_is_still_reported_as_a_change(
+        self, fleet: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The slot survives the reconcile, but one repo's ports still moved —
+        saying "nothing changed" there is how a repair loses its user."""
+        workspace.main(["--root", str(fleet), "setup"])
+        self._claim(fleet, "split", 3, repos=("alpha",))
+        self._claim(fleet, "split", 9, repos=("beta",))
+        capsys.readouterr()
+
+        workspace.main(["--root", str(fleet), "wt-doctor"])
+        out = capsys.readouterr().out
+
+        assert "slot of its own" not in out
+        assert "restart" in out
+
+    def test_the_doctor_gives_a_slotless_worktree_a_block(self, fleet: Path) -> None:
+        """Cut before slots existed, so it is invisible to reconcile — and is
+        the one actually sharing 5173 with the main checkout."""
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "from-the-old-days")
+
+        workspace.main(["--root", str(fleet), "wt-doctor"])
+
+        assert self._slot_on_disk(fleet, "alpha", "from-the-old-days") is not None
+
+    def test_a_file_naming_another_tree_is_not_a_claim_to_honour(self, fleet: Path) -> None:
+        """A copied worktree: the file still names the tree it came from, and
+        still points YEABOI_HOME at that tree's data."""
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "copied", ("alpha",))
+        body = "\n".join(workspace.wt_slots.env_lines("the-original", 3)) + "\n"
+        (fleet / "alpha" / ".claude" / "worktrees" / "copied" / ".worktree.env").write_text(body)
+
+        workspace.main(["--root", str(fleet), "wt-doctor"])
+
+        claim = workspace.wt_slots.read_claim(fleet / "alpha" / ".claude" / "worktrees" / "copied" / ".worktree.env")
+        assert claim is not None and claim[0] == "copied"
+
+    def test_an_unreadable_worktree_never_blocks_a_cut(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """wt-new reconciles before it cuts; a slot is a shared machine resource
+        and must never be the reason a feature does not get branched."""
+        workspace.main(["--root", str(fleet), "setup"])
+        _plant(fleet, "corrupt", ("alpha",))
+        (fleet / "alpha" / ".claude" / "worktrees" / "corrupt" / ".worktree.env").write_bytes(
+            b"export YEABOI_WT_NAME=corrupt\nexport YEABOI_WT_SLOT=2\n\xff\xfe"
+        )
+        calls: list = []
+        TestCuttingASet._stub(monkeypatch, calls)
+
+        assert workspace.main(["--root", str(fleet), "wt-set", "fresh", "--headless"]) == 0
+        assert calls, "the cut still happened"
+
+    def test_a_healthy_workspace_is_left_untouched(self, fleet: Path, capsys: pytest.CaptureFixture) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        self._claim(fleet, "one", 1)
+        self._claim(fleet, "two", 2)
+        capsys.readouterr()
+
+        workspace.main(["--root", str(fleet), "wt-doctor"])
+
+        assert "slot of its own" in capsys.readouterr().out
+        assert self._slot_on_disk(fleet, "alpha", "one") == 1
+        assert self._slot_on_disk(fleet, "alpha", "two") == 2

@@ -184,3 +184,97 @@ class TestTheGeneratedFile:
         body = self._render(tmp_path).read_text()
         assert "YEABOI_HOME=" in body
         assert "ENV_FILE" not in body
+
+
+class TestReconciling:
+    """The registry can lose track of a live worktree; its ports do not care.
+
+    `.worktree.env` is what make actually includes, so a tree whose registry
+    entry went missing is still listening on its block. Handing that block to
+    the next cut is what produced "Port 20762 is already in use" in a worktree
+    that had done nothing wrong.
+    """
+
+    def _env(self, tmp_path: Path, name: str, slot: int) -> Path:
+        out = tmp_path / wt_slots.slug(name) / ".worktree.env"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("\n".join(wt_slots.env_lines(name, slot)) + "\n")
+        return out
+
+    def test_a_claim_round_trips_through_the_generated_file(self, tmp_path: Path) -> None:
+        path = self._env(tmp_path, "desktop/settings-page", 7)
+        assert wt_slots.read_claim(path) == ("desktop/settings-page", 7)
+
+    def test_a_file_that_is_not_one_of_ours_claims_nothing(self, tmp_path: Path) -> None:
+        stray = tmp_path / ".worktree.env"
+        stray.write_text("export SOMETHING=else\n")
+        assert wt_slots.read_claim(stray) is None
+        assert wt_slots.read_claim(tmp_path / "absent.env") is None
+
+    def test_a_live_tree_keeps_the_slot_it_is_already_serving_on(self) -> None:
+        # The registry says 8; the tree on disk — and its running vite — say 7.
+        wt_slots.allocate("desktop/settings-page")
+        wt_slots.reconcile({"desktop/settings-page": 7})
+        assert wt_slots.get("desktop/settings-page") == 7
+
+    def test_a_missing_entry_is_not_free_to_hand_out(self) -> None:
+        # 'project-mode-polish' was cut into the hole a per-repo rm punched in
+        # the registry, and landed on a slot a live tree was serving from.
+        wt_slots.reconcile({"desktop/settings-page": 7, "desktop/tips-ui": 8})
+        assert wt_slots.allocate("project-mode-polish") not in (7, 8)
+
+    def test_two_trees_on_one_slot_are_pulled_apart(self) -> None:
+        moved = wt_slots.reconcile({"solo-mode": 18, "agents/ai-native-sdlc": 18})
+        table = {name: wt_slots.get(name) for name in ("solo-mode", "agents/ai-native-sdlc")}
+        assert table["solo-mode"] != table["agents/ai-native-sdlc"]
+        # Sorted, so the same tree moves on every machine and on a re-run.
+        assert set(moved) == {"solo-mode"}
+        assert wt_slots.get("agents/ai-native-sdlc") == 18
+
+    def test_a_claim_that_collides_with_nobody_is_never_moved(self) -> None:
+        # The free slot below a live claim: picking it for the loser of an
+        # unrelated collision walks that name onto ports 'c' is serving on.
+        moved = wt_slots.reconcile({"a": 5, "b": 5, "c": 1})
+
+        assert wt_slots.get("c") == 1, "c was in conflict with nobody"
+        assert set(moved) == {"b"}
+        assert wt_slots.get("b") not in (1, 5)
+
+    def test_a_name_with_no_live_claim_keeps_its_slot_by_default(self) -> None:
+        # It may be a cut still fanning out — its worktrees are not on disk to
+        # be scanned yet — or a tree in a second workspace root. Freeing it is
+        # exactly the race the up-front allocation exists to avoid.
+        wt_slots.allocate("mid-cut")
+        wt_slots.reconcile({"still-here": 5})
+        assert wt_slots.get("mid-cut") == 1
+
+    def test_collecting_is_what_takes_a_departed_name_off_the_books(self) -> None:
+        wt_slots.allocate("shipped-and-removed")
+        wt_slots.reconcile({"still-here": 5}, gc=True)
+        assert wt_slots.get("shipped-and-removed") is None
+
+    def test_a_live_claim_outranks_a_registry_entry_serving_nothing(self) -> None:
+        # Kept entries must not be able to push a real worktree off its ports.
+        wt_slots.allocate("ghost")  # slot 1
+        assert wt_slots.reconcile({"real": 1}) == {}
+        assert wt_slots.get("real") == 1
+        assert wt_slots.get("ghost") is None
+
+    def test_reconciling_twice_moves_nothing_the_second_time(self) -> None:
+        claims = {"a": 3, "b": 3, "c": 1, "d": 2}
+        wt_slots.reconcile(claims)
+        settled = {name: wt_slots.get(name) for name in claims}
+        assert wt_slots.reconcile(settled) == {}
+
+    def test_a_name_pinned_to_two_slots_yields_to_one_pinned_to_a_single_slot(self) -> None:
+        # 'a-split' wins on name alone, but its repos disagree — it is not
+        # coherently serving on 7, while 'polish' may be serving on it now.
+        moved = wt_slots.reconcile({"a-split": 7, "polish": 7}, unsettled={"a-split"})
+
+        assert wt_slots.get("polish") == 7
+        assert set(moved) == {"a-split"}
+
+    def test_an_unsettled_name_keeps_its_slot_when_nothing_contests_it(self) -> None:
+        # Losing every collision is not the same as always moving.
+        assert wt_slots.reconcile({"quiet": 11}, unsettled={"quiet"}) == {}
+        assert wt_slots.get("quiet") == 11

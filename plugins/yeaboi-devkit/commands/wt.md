@@ -52,6 +52,10 @@ or when the work genuinely lives in one repo.
   `basename`, which drops everything before the last slash and removes nothing.
 - `sets` — run `make wt-sets`: which worktree names exist in which repos, across the workspace. A
   name in more than one repo is a set.
+- `doctor` — run `make wt-doctor`. The answer to "Port NNNNN is already in use" in a worktree that
+  has done nothing wrong: it reseats every worktree on a port block of its own and rewrites the
+  `.worktree.env` files it had to move. Report which trees moved and say that a dev server already
+  running in one of them needs a restart to pick up its new ports.
 
 `wt-set` and `wt-set-rm` are aliases for `wt-new` and `wt-rm`, kept because they read better when you
 are deliberately naming a few repos.
@@ -63,7 +67,7 @@ A fresh worktree has no `.tooling/` (it is gitignored, which is exactly why the 
 pinned clone and not a submodule — `git worktree add` does not populate submodules). The first `make`
 in it clones the pin automatically; nothing to do by hand.
 
-The workspace targets — `wt-new`, `wt-rm`, `wt-sets`, and `workspace-setup` / `workspace-status` /
+The workspace targets — `wt-new`, `wt-rm`, `wt-sets`, `wt-doctor`, and `workspace-setup` / `workspace-status` /
 `workspace-env` — reach the sibling checkouts, so they need the repos side by side under one
 directory. `make workspace-status` says which are missing; `make workspace-setup` clones and
 provisions them.

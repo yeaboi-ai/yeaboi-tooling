@@ -133,7 +133,15 @@ if [ "$ACTION" = "rm" ]; then
     # earlier rm, a hand-deleted tree). Clearing it is the repair.
     rm -rf "$TARGET"
   fi
-  python3 "$SCRIPT_DIR/wt_slots.py" release "$NAME" 2>/dev/null || true
+  # The slot is NOT released here. One name is cut across every repo, so the
+  # sibling worktrees still on disk still hold a .worktree.env pinned to this
+  # slot — and make reads that file, so they are still listening on its ports.
+  # Freeing it per repo handed a live tree's vite port to the next `wt-new`.
+  # Like the data home next to it, the slot may only go once NO repo carries
+  # the name, which only workspace.py can see: cmd_wt_set_rm releases it.
+  # `wt-one-rm` on a name that only ever existed in one repo does not reach
+  # that path and leaks its entry; `make wt-doctor` collects it, which is the
+  # backstop for every route into the registry that cannot see the workspace.
   git -C "$ROOT" worktree prune
   git -C "$ROOT" branch -D "$NAME" 2>/dev/null || true
 
