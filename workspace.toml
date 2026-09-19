@@ -1,4 +1,4 @@
-# The yeaboi workspace — the five repos that make one product, checked out side
+# The yeaboi workspace — the six repos that make one product, checked out side
 # by side. `make workspace-setup` reads this, `make workspace-status` reports on
 # it, and the nightly cross-repo check builds its matrix from the rows that
 # vendor a contract.

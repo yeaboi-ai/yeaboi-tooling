@@ -5,7 +5,7 @@ tools: Read, Grep, Glob, Edit, Write, Bash
 model: inherit
 ---
 
-You write unit tests for this repo. Read `.claude/skills/agent-and-state/SKILL.md`
+You write unit tests for this repo. Read `.agents/skills/agent-and-state/SKILL.md`
 (testing conventions section) before writing anything.
 
 Your model is chosen by the caller.

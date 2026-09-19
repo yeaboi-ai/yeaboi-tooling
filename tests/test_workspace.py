@@ -290,10 +290,10 @@ class TestWorktreeSets:
         removes a worktree by hand. The listing is the directories themselves."""
         workspace.main(["--root", str(fleet), "setup"])
         for name in ("alpha", "beta"):
-            tree = fleet / name / ".claude" / "worktrees" / "shared-feature"
+            tree = fleet / name / ".worktrees" / "shared-feature"
             tree.mkdir(parents=True)
             (tree / ".git").write_text("gitdir: elsewhere\n")
-        (fleet / "alpha" / ".claude" / "worktrees" / "solo").mkdir()
+        (fleet / "alpha" / ".worktrees" / "solo").mkdir()
         capsys.readouterr()
 
         workspace.main(["--root", str(fleet), "wt-sets"])
@@ -308,7 +308,7 @@ class TestWorktreeSets:
         is how a feature ships in one repo and is forgotten in the other."""
         workspace.main(["--root", str(fleet), "setup"])
         for name in ("alpha", "beta"):
-            tree = fleet / name / ".claude" / "worktrees" / "desktop" / "tips-ui"
+            tree = fleet / name / ".worktrees" / "desktop" / "tips-ui"
             tree.mkdir(parents=True)
             (tree / ".git").write_text("gitdir: elsewhere\n")
         capsys.readouterr()
@@ -323,7 +323,7 @@ class TestWorktreeSets:
         """Every worktree carries a .tooling checkout at the pinned sha. It has a
         .git, but it is not a worktree of this repo and must never be a name."""
         workspace.main(["--root", str(fleet), "setup"])
-        tree = fleet / "alpha" / ".claude" / "worktrees" / "feature"
+        tree = fleet / "alpha" / ".worktrees" / "feature"
         (tree / ".tooling").mkdir(parents=True)
         (tree / ".git").write_text("gitdir: elsewhere\n")
         (tree / ".tooling" / ".git").write_text("gitdir: elsewhere\n")
@@ -335,7 +335,7 @@ class TestWorktreeSets:
         walking them is both wrong (they are not names) and slow enough — minutes,
         across five repos — to look like a hang."""
         workspace.main(["--root", str(fleet), "setup"])
-        tree = fleet / "alpha" / ".claude" / "worktrees" / "feature"
+        tree = fleet / "alpha" / ".worktrees" / "feature"
         vendored = tree / "node_modules" / "some-package"
         vendored.mkdir(parents=True)
         (tree / ".git").write_text("gitdir: elsewhere\n")
@@ -369,7 +369,7 @@ class TestCuttingASet:
             calls.append(args)
             name = next(a.split("=", 1)[1] for a in args if a.startswith("NAME="))
             if ok:
-                (Path(args[2]) / ".claude" / "worktrees" / name).mkdir(parents=True, exist_ok=True)
+                (Path(args[2]) / ".worktrees" / name).mkdir(parents=True, exist_ok=True)
             recipe = 'WT_REPO_DIR="' + args[2] + '" bash wt.sh headless'
             return ok, f"{recipe}\n[wt] worktree ready: {name}\n"
 
@@ -442,36 +442,44 @@ class TestCuttingASet:
         spec = json.loads((fleet / ".worktrees" / "one-window.code-workspace").read_text())
         folders = [f["path"] for f in spec["folders"]]
         assert [f["name"] for f in spec["folders"]] == ["alpha", "beta"], "manifest order"
-        assert folders == [str(fleet / n / ".claude" / "worktrees" / "one-window") for n in ("alpha", "beta")]
+        assert folders == [str(fleet / n / ".worktrees" / "one-window") for n in ("alpha", "beta")]
 
-        (task,) = spec["tasks"]["tasks"]
-        assert task["options"]["cwd"] == folders[0], "the session starts in the first repo…"
-        assert folders[1] in task["command"] and "--add-dir" in task["command"], "…and can see the rest"
-        assert spec["settings"]["task.allowAutomaticTasks"] == "on", "else VS Code asks before starting claude"
+        tasks = spec["tasks"]["tasks"]
+        assert {task["command"] for task in tasks} == {"claude", "codex"}
+        for task in tasks:
+            assert task["options"]["cwd"] == folders[0]
+            assert task["args"][:-1] == ["--add-dir", folders[1], "--"]
+            assert "AGENTS.md" in task["args"][-1]
+            assert "runOptions" not in task
 
     def test_a_pre_existing_folder_task_is_removed(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A `wt-one` worktree joining a set would otherwise start a second
         claude of its own beside the workspace-level one."""
         workspace.main(["--root", str(fleet), "setup"])
         self._stub(monkeypatch, [])
-        stale = fleet / "alpha" / ".claude" / "worktrees" / "reused" / ".vscode"
+        stale = fleet / "alpha" / ".worktrees" / "reused" / ".vscode"
         stale.mkdir(parents=True)
-        (stale / "tasks.json").write_text('{"tasks": [{"runOptions": {"runOn": "folderOpen"}}]}')
+        (stale / "tasks.json").write_text(
+            '{"tasks": [{"label": "claude", "runOptions": {"runOn": "folderOpen"}}, '
+            '{"label": "dev", "command": "make dev"}]}'
+        )
 
         workspace.main(["--root", str(fleet), "wt-set", "reused", "--headless"])
 
-        assert not (stale / "tasks.json").exists()
+        tasks = json.loads((stale / "tasks.json").read_text())["tasks"]
+        assert "runOptions" not in tasks[0]
+        assert tasks[1]["command"] == "make dev"
 
     def test_a_succeeding_repo_s_output_loses_what_only_fits_one_repo(self) -> None:
         """Five copies of make's recipe line and of wt.sh's background-agent note
         bury the five lines that say a worktree is ready."""
         noisy = (
             'WT_REPO_DIR="/x" CODE="code" bash .tooling/scripts/wt.sh "f" headless\n'
-            "[wt] worktree ready: /x/.claude/worktrees/f\n"
+            "[wt] worktree ready: /x/.worktrees/f\n"
             "[wt] headless — no VS Code auto-launch; drive it with a background agent\n"
         )
 
-        assert workspace.tidy(noisy).splitlines() == ["[wt] worktree ready: /x/.claude/worktrees/f"]
+        assert workspace.tidy(noisy).splitlines() == ["[wt] worktree ready: /x/.worktrees/f"]
 
     def test_a_failing_repo_keeps_every_line(
         self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
@@ -492,7 +500,7 @@ class TestCuttingASet:
         self._stub(monkeypatch, [])
         workspace.main(["--root", str(fleet), "wt-set", "gone", "--headless"])
         for name in ("alpha", "beta"):
-            (fleet / name / ".claude" / "worktrees" / "gone" / ".git").write_text("gitdir: elsewhere\n")
+            (fleet / name / ".worktrees" / "gone" / ".git").write_text("gitdir: elsewhere\n")
         spec = fleet / ".worktrees" / "gone.code-workspace"
         assert spec.is_file()
 
@@ -513,7 +521,7 @@ def _rm_stub(monkeypatch: pytest.MonkeyPatch, order: list[str] | None = None):
         name = next(a.split("=", 1)[1] for a in args if a.startswith("NAME="))
         if order is not None:
             order.append(name)
-        home = Path(args[2]) / ".claude" / "worktrees"
+        home = Path(args[2]) / ".worktrees"
         shutil.rmtree(home / name, ignore_errors=True)
         parent = (home / name).parent
         while parent != home and home in parent.parents:
@@ -531,7 +539,7 @@ def _plant(fleet: Path, name: str, repos: tuple[str, ...] = ("alpha", "beta")) -
     """A worktree on disk that git registers nowhere — what a moved repo or a
     half-finished removal leaves behind, and what `git worktree list` misses."""
     for repo in repos:
-        tree = fleet / repo / ".claude" / "worktrees" / name
+        tree = fleet / repo / ".worktrees" / name
         tree.mkdir(parents=True)
         (tree / ".git").write_text("gitdir: elsewhere\n")
 
@@ -626,7 +634,7 @@ class TestRemovingEveryWorktree:
 
         assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 0
         for repo in ("alpha", "beta"):
-            assert not (fleet / repo / ".claude" / "worktrees" / "left-behind").exists()
+            assert not (fleet / repo / ".worktrees" / "left-behind").exists()
 
     def test_it_reaches_every_repo_and_every_name(self, fleet: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         workspace.main(["--root", str(fleet), "setup"])
@@ -648,7 +656,7 @@ class TestRemovingEveryWorktree:
         _plant(fleet, "zzz-here")
         order: list[str] = []
         _rm_stub(monkeypatch, order)
-        monkeypatch.chdir(fleet / "alpha" / ".claude" / "worktrees" / "zzz-here")
+        monkeypatch.chdir(fleet / "alpha" / ".worktrees" / "zzz-here")
 
         assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 0
         assert order[-1] == "zzz-here", order
@@ -763,7 +771,7 @@ class TestWorktreeSiblings:
 
     @staticmethod
     def _cut(fleet: Path, repo: str, name: str) -> Path:
-        tree = fleet / repo / ".claude" / "worktrees" / name
+        tree = fleet / repo / ".worktrees" / name
         tree.mkdir(parents=True)
         (tree / ".git").write_text("gitdir: elsewhere\n")
         return tree

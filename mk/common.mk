@@ -33,11 +33,13 @@ TOOLING_REPO ?= https://github.com/yeaboi-ai/yeaboi-tooling.git
 # $(CURDIR) on the marker and take the LAST word: a space anywhere in the
 # path prefix falls away with the prefix, and the suffix is a git branch
 # name, which can never contain a space itself.
-WT_SELF = $(if $(YEABOI_WT_NAME),$(YEABOI_WT_NAME),$(if $(findstring /.claude/worktrees/,$(CURDIR)),$(lastword $(subst /.claude/worktrees/, ,$(CURDIR))),$(notdir $(CURDIR))))
+WT_SELF = $(if $(YEABOI_WT_NAME),$(YEABOI_WT_NAME),$(if $(findstring /.worktrees/,$(CURDIR)),$(lastword $(subst /.worktrees/, ,$(CURDIR))),$(if $(findstring /.claude/worktrees/,$(CURDIR)),$(lastword $(subst /.claude/worktrees/, ,$(CURDIR))),$(notdir $(CURDIR)))))
 
 # Editor CLI used by every target that opens a window. Override for VS Code
 # forks (e.g. `CODE=cursor make wt-new NAME=my-feature`).
 CODE ?= code
+# Empty offers both launch tasks; set AGENT to auto-start exactly one.
+AGENT ?=
 
 # Which repos the workspace-wide wt-* targets touch. Empty means every repo in
 # workspace.toml — the common case, and the reason `make wt-new NAME=x` needs no
@@ -79,7 +81,7 @@ TOOLING_REQUIRED_TARGETS ?= lint test test-fast test-scoped ship-gate demo
 #   wt-new / wt-rm / wt-rm-all
 #                   act on the WHOLE workspace. One feature is one branch of the
 #                   same name in every repo, opened as ONE multi-root VS Code
-#                   window with one claude session that can see all of them.
+#                   window with a selected AI session that can see all of them.
 #                   REPOS="yeaboi frontend" narrows them to a few.
 #
 #   wt-one / wt-open / wt-headless / wt-issue / wt-one-rm
@@ -100,7 +102,7 @@ WT_REUSE = $(if $(filter-out 0,$(REUSE)),1,)
 
 # The scripts live in the `.tooling` clone, which is its own git repository, so
 # they take the project from the environment rather than from their own path.
-WT_ENV = WT_REPO_DIR="$(CURDIR)" CODE="$(CODE)" WT_REUSE_BRANCH="$(WT_REUSE)"
+WT_ENV = AGENT="$(AGENT)" WT_REPO_DIR="$(CURDIR)" CODE="$(CODE)" WT_REUSE_BRANCH="$(WT_REUSE)"
 
 # An unset REPOS must reach workspace.py as an ABSENT flag, not an empty string:
 # absent is what means "every repo in workspace.toml".
@@ -113,7 +115,7 @@ WT_YES = $(if $(filter-out 0,$(YES)),--yes,)
 
 wt-new: ## Cut NAME off latest origin/main in EVERY repo (re-run to rebase them onto it) + one VS Code window; REPOS="…" narrows, HEADLESS=1 skips the editor, REUSE=1 continues existing branches
 	$(need-name)
-	@CODE="$(CODE)" $(WORKSPACE) wt-set "$(NAME)" $(WT_REPOS) $(WT_HEADLESS) $(WT_REUSE_FLAG)
+	@CODE="$(CODE)" AGENT="$(AGENT)" $(WORKSPACE) wt-set "$(NAME)" $(WT_REPOS) $(WT_HEADLESS) $(WT_REUSE_FLAG)
 
 wt-rm: ## Remove worktree NAME from every repo that has it, and its .code-workspace (REPOS="…" narrows)
 	$(need-name)
@@ -133,11 +135,11 @@ wt-sets: ## Which worktree names exist in which repos (a name in several is a se
 	@$(WORKSPACE) wt-sets
 
 wt-siblings: ## Which repos carry worktree NAME, and what each still owes (exit 1 if any does)
-	@$(WORKSPACE) wt-siblings "$(NAME)"
+	@$(WORKSPACE) wt-siblings "$(or $(NAME),$(WT_SELF))"
 
 # --- the single-repo set (what scripts and agents call) ----------------------
 
-wt-one: ## Create worktree in THIS repo only, off latest origin/main (REUSE=1 continues an existing branch, rebased), + open VS Code with claude auto-running
+wt-one: ## Create worktree in THIS repo only, off latest origin/main (REUSE=1 continues an existing branch, rebased), + open VS Code with Claude and Codex launch tasks
 	$(need-name)
 	$(WT_ENV) bash $(TOOLING)/scripts/wt.sh "$(NAME)" open
 
@@ -281,3 +283,27 @@ contracts-sync: ## Re-vendor $(CONTRACTS_PATHS) from the tip of $(CONTRACTS_REPO
 contracts-check: ## Fail if the vendored contracts differ from the pinned sha, or the pin is behind upstream
 	@test -n "$(CONTRACTS_REPO)" || exit 0
 	@bash $(TOOLING)/scripts/contracts.sh check "$(CONTRACTS_REPO)" "$(CONTRACTS_DIR)" $(CONTRACTS_PATHS)
+
+# --- shared AI entry points --------------------------------------------------
+.PHONY: agent agent-run agent-setup agent-check verify-changes
+agent agent-run: export YEABOI_AGENT_CONTEXT = $(value ARGS)
+agent: agent-setup ## Start AGENT=claude|codex in this repo (optional TASK=<skill> ARGS="context")
+	@$(PYTHON) $(TOOLING)/scripts/agent.py launch --agent "$(AGENT)" --task "$(TASK)"
+
+agent-run: agent-setup ## Run TASK=<skill> with AGENT=claude|codex non-interactively using its local login
+	@$(PYTHON) $(TOOLING)/scripts/agent.py run --agent "$(AGENT)" --task "$(TASK)"
+
+agent-setup: ## Expose the pinned shared skills to Codex (does not install or authenticate either CLI)
+	@$(PYTHON) $(TOOLING)/scripts/agent_setup.py --root "$(CURDIR)" --tooling "$(TOOLING)"
+
+agent-check: ## Check assistant availability and shared skill links
+	@$(PYTHON) $(TOOLING)/scripts/agent_setup.py --root "$(CURDIR)" --tooling "$(TOOLING)" --check
+	@$(PYTHON) $(TOOLING)/scripts/agent.py check
+
+verify-changes: ## The provider-independent end-of-turn checks
+	@make lint
+	@make test-scoped
+
+.PHONY: review-feedback
+review-feedback: ## Read all PR reviews, including advisory Codex findings (PR=number or current branch)
+	@$(PYTHON) $(TOOLING)/scripts/review_feedback.py --pr "$(PR)"

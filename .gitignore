@@ -20,3 +20,9 @@ __pycache__/
 
 # Feature clips render here; only the spec in .demo/clips/ is committed.
 .demo/out/
+
+.worktrees/
+
+.agents/skills/yeaboi-*
+
+.agents/skills/repo-workflow

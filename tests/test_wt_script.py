@@ -79,14 +79,15 @@ def repo(tmp_path: Path, env: dict[str, str]) -> Path:
     shutil.copy(WT_SH, scripts / "wt.sh")
     # wt.sh resolves its siblings from its own directory, so the slot allocator
     # has to travel with it.
-    shutil.copy(WT_SH.parent / "wt_slots.py", scripts / "wt_slots.py")
+    for sibling in ("wt_slots.py", "worktree_paths.py", "agent.py"):
+        shutil.copy(WT_SH.parent / sibling, scripts / sibling)
     (work / "f.txt").write_text("one\n")
     _git(work, "add", "-A", env=env)
     _git(work, "commit", "-qm", "one", env=env)
     _git(work, "push", "-q", "-u", "origin", "main", env=env)
     # Worktrees are gitignored in the real repo; mirror that so the clone reads
     # as clean once one exists.
-    (work / ".git" / "info" / "exclude").write_text(".claude/worktrees/\n")
+    (work / ".git" / "info" / "exclude").write_text(".worktrees/\n")
     return work
 
 
@@ -209,7 +210,7 @@ class TestExistingBranch:
         assert result.returncode != 0
         assert "refusing to reuse existing branch 'old-feat'" in result.stderr
         assert "REUSE=1" in result.stderr, "the refusal must name the way through"
-        assert not (repo / ".claude" / "worktrees" / "old-feat").exists()
+        assert not (repo / ".worktrees" / "old-feat").exists()
         assert _git(repo, "rev-parse", "old-feat", env=env) == old
 
     def test_reuse_rebases_the_existing_branch(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
@@ -240,7 +241,7 @@ class TestExistingBranch:
         assert _git(repo, "rev-parse", "clash", env=env) == tip, "the aborted rebase moved the branch"
         assert "hit conflicts" in result.stdout
         assert "/sync-main" in result.stdout
-        tree = repo / ".claude" / "worktrees" / "clash"
+        tree = repo / ".worktrees" / "clash"
         assert tree.is_dir(), "the worktree is the expensive part — a failed rebase must not cost it"
         assert not (repo / ".git" / "worktrees" / "clash" / "rebase-merge").exists()
 
@@ -294,14 +295,14 @@ class TestRemoteBranch:
         result = _run_wt(repo, "feature/nested-fix", env, reuse=True)
 
         assert result.returncode == 0, result.stderr
-        assert (repo / ".claude" / "worktrees" / "feature" / "nested-fix").is_dir()
+        assert (repo / ".worktrees" / "feature" / "nested-fix").is_dir()
         assert _git(repo, "rev-parse", "feature/nested-fix", env=env) == remote_tip
 
 
 class TestNestedNames:
     """A '/' in NAME nests the directory — creation, removal and the guards between.
 
-    The parent path (.claude/worktrees/desktop while desktop/feature exists) is
+    The parent path (.worktrees/desktop while desktop/feature exists) is
     a plain directory HOLDING worktrees, and every action that derives a path
     from NAME must know the difference: `rm` of the prefix used to rm -rf every
     nested tree's uncommitted work, and a "refresh" of it ran `git -C` commands
@@ -314,10 +315,10 @@ class TestNestedNames:
         result = _run_wt(repo, "feature/nested-fix", env, action="rm")
 
         assert result.returncode == 0, result.stderr
-        assert not (repo / ".claude" / "worktrees" / "feature" / "nested-fix").exists()
+        assert not (repo / ".worktrees" / "feature" / "nested-fix").exists()
         # The now-empty parent must go too: left behind, it makes the next
         # `wt-new NAME=feature` read as a refresh of a non-worktree dir.
-        assert not (repo / ".claude" / "worktrees" / "feature").exists()
+        assert not (repo / ".worktrees" / "feature").exists()
         assert _git(repo, "branch", "--list", "feature/nested-fix", env=env) == ""
         # And the name's prefix is a normal name again: a fresh CREATE, not a refresh.
         after = _run_wt(repo, "feature", env)
@@ -328,7 +329,7 @@ class TestNestedNames:
         """The data-loss case: rm -rf of the parent dir used to eat both trees."""
         assert _run_wt(repo, "desktop/feature", env).returncode == 0
         assert _run_wt(repo, "desktop/other", env).returncode == 0
-        keep = repo / ".claude" / "worktrees" / "desktop" / "feature" / "half-done.txt"
+        keep = repo / ".worktrees" / "desktop" / "feature" / "half-done.txt"
         keep.write_text("uncommitted work\n")
 
         result = _run_wt(repo, "desktop", env, action="rm")
@@ -337,13 +338,13 @@ class TestNestedNames:
         assert "desktop/feature" in result.stderr
         assert "desktop/other" in result.stderr
         for name in ("feature", "other"):
-            tree = repo / ".claude" / "worktrees" / "desktop" / name
+            tree = repo / ".worktrees" / "desktop" / name
             assert (tree / ".git").exists(), f"{name} was unregistered"
         assert keep.read_text() == "uncommitted work\n"
 
     def test_rm_of_a_stale_unregistered_dir_still_cleans(self, repo: Path, env: dict[str, str]) -> None:
         """Debris from a crashed rm or a hand-deleted tree stays removable."""
-        stale = repo / ".claude" / "worktrees" / "stale"
+        stale = repo / ".worktrees" / "stale"
         stale.mkdir(parents=True)
         (stale / "junk.txt").write_text("x\n")
 
@@ -362,7 +363,7 @@ class TestNestedNames:
         assert "branch 'desktop' exists" in result.stderr
         # The old failure came out of `git worktree add`, after mkdir -p had
         # already orphaned the parent dir. Nothing may be left behind now.
-        assert not (repo / ".claude" / "worktrees" / "desktop").exists()
+        assert not (repo / ".worktrees" / "desktop").exists()
 
     def test_creating_a_prefix_of_an_existing_worktree_refuses(self, repo: Path, env: dict[str, str]) -> None:
         """The dir exists (it holds desktop/feature), so the old code 'refreshed' it —
@@ -375,16 +376,16 @@ class TestNestedNames:
         assert result.returncode != 0
         assert "desktop/feature" in result.stderr
         assert _git(repo, "rev-parse", "main", env=env) == main_tip
-        assert (repo / ".claude" / "worktrees" / "desktop" / "feature" / ".git").exists()
+        assert (repo / ".worktrees" / "desktop" / "feature" / ".git").exists()
 
     def test_repair_refuses_the_prefix_dir(self, repo: Path, env: dict[str, str]) -> None:
-        """Repairing .claude/worktrees/desktop would hand a slot to nobody's tree."""
+        """Repairing .worktrees/desktop would hand a slot to nobody's tree."""
         assert _run_wt(repo, "desktop/feature", env).returncode == 0
 
         result = _run_wt(repo, "desktop", env, action="repair")
 
         assert result.returncode != 0
-        assert not (repo / ".claude" / "worktrees" / "desktop" / ".worktree.env").exists()
+        assert not (repo / ".worktrees" / "desktop" / ".worktree.env").exists()
 
 
 class TestLocalDefaultSync:
@@ -446,7 +447,7 @@ class TestRefresh:
     def test_a_dirty_worktree_is_left_alone(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
         """Never stash: this is provisioning, not a decision about half-finished work."""
         assert _run_wt(repo, "feat-x", env).returncode == 0
-        tree = repo / ".claude" / "worktrees" / "feat-x"
+        tree = repo / ".worktrees" / "feat-x"
         before = _git(repo, "rev-parse", "feat-x", env=env)
         (tree / "f.txt").write_text("edited in the worktree\n")
         _push_upstream_commit(tmp_path, env)
@@ -461,7 +462,7 @@ class TestRefresh:
     def test_untracked_files_do_not_block_the_refresh(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
         """Every worktree has build output; counting it would make the rebase dead code."""
         assert _run_wt(repo, "feat-x", env).returncode == 0
-        (repo / ".claude" / "worktrees" / "feat-x" / "build.log").write_text("noise\n")
+        (repo / ".worktrees" / "feat-x" / "build.log").write_text("noise\n")
         upstream = _push_upstream_commit(tmp_path, env)
 
         result = _run_wt(repo, "feat-x", env)
@@ -476,7 +477,7 @@ class TestRefresh:
         _git(repo, "commit", "-qm", "provision", env=env)
         _git(repo, "push", "-q", "origin", "main", env=env)
         assert _run_wt(repo, "feat-x", env).returncode == 0
-        stamp = repo / ".claude" / "worktrees" / "feat-x" / "provisioned.txt"
+        stamp = repo / ".worktrees" / "feat-x" / "provisioned.txt"
         once = stamp.read_text()
 
         result = _run_wt(repo, "feat-x", env)
@@ -490,14 +491,14 @@ class TestPortBlock:
 
     def test_a_new_worktree_gets_a_block(self, repo: Path, env: dict[str, str]) -> None:
         assert _run_wt(repo, "feat-x", env).returncode == 0
-        body = (repo / ".claude" / "worktrees" / "feat-x" / ".worktree.env").read_text()
+        body = (repo / ".worktrees" / "feat-x" / ".worktree.env").read_text()
         assert "export RETRO_PORT=" in body
         assert "export YEABOI_HOME=" in body
 
     def test_the_block_is_sourceable_by_sh(self, repo: Path, env: dict[str, str]) -> None:
         """`npm run dev` is not started by make and has to read the same file."""
         assert _run_wt(repo, "feat-x", env).returncode == 0
-        tree = repo / ".claude" / "worktrees" / "feat-x"
+        tree = repo / ".worktrees" / "feat-x"
         out = subprocess.run(
             ["sh", "-c", '. ./.worktree.env; echo "$RETRO_PORT"'],
             cwd=tree,
@@ -511,7 +512,7 @@ class TestPortBlock:
         ports = []
         for name in ("feat-a", "feat-b"):
             assert _run_wt(repo, name, env).returncode == 0
-            body = (repo / ".claude" / "worktrees" / name / ".worktree.env").read_text()
+            body = (repo / ".worktrees" / name / ".worktree.env").read_text()
             ports.append(next(ln for ln in body.splitlines() if ln.startswith("export RETRO_PORT=")))
         assert ports[0] != ports[1], ports
 
@@ -522,17 +523,15 @@ class TestPortBlock:
 
     def test_rm_frees_the_slot_for_the_next_worktree(self, repo: Path, env: dict[str, str]) -> None:
         assert _run_wt(repo, "feat-a", env).returncode == 0
-        first = (repo / ".claude" / "worktrees" / "feat-a" / ".worktree.env").read_text()
+        first = (repo / ".worktrees" / "feat-a" / ".worktree.env").read_text()
         assert _run_wt(repo, "feat-a", env, action="rm").returncode == 0
         assert _run_wt(repo, "feat-b", env).returncode == 0
-        assert (repo / ".claude" / "worktrees" / "feat-b" / ".worktree.env").read_text().replace(
-            "feat-b", "feat-a"
-        ) == first
+        assert (repo / ".worktrees" / "feat-b" / ".worktree.env").read_text().replace("feat-b", "feat-a") == first
 
     def test_repair_gives_an_existing_worktree_a_block(self, repo: Path, env: dict[str, str]) -> None:
         """The retrofit path for worktrees cut before slots existed."""
         assert _run_wt(repo, "feat-x", env).returncode == 0
-        block = repo / ".claude" / "worktrees" / "feat-x" / ".worktree.env"
+        block = repo / ".worktrees" / "feat-x" / ".worktree.env"
         block.unlink()
 
         assert _run_wt(repo, "feat-x", env, action="repair").returncode == 0
@@ -549,7 +548,7 @@ class TestPortBlock:
         result = _run_wt(repo, "feat-x", env)
 
         assert result.returncode == 0, result.stderr
-        assert (repo / ".claude" / "worktrees" / "feat-x").is_dir()
+        assert (repo / ".worktrees" / "feat-x").is_dir()
 
 
 class TestProvision:
@@ -566,11 +565,11 @@ class TestProvision:
         result = _run_wt(repo, "feat-p", env)
 
         assert result.returncode == 0, result.stderr
-        stamp = repo / ".claude" / "worktrees" / "feat-p" / "provisioned.txt"
+        stamp = repo / ".worktrees" / "feat-p" / "provisioned.txt"
         assert stamp.is_file(), "provision.sh did not run"
         # Its cwd is the worktree, not the main checkout — a venv built in the
         # wrong tree is worse than none.
-        assert Path(stamp.read_text().strip()).resolve() == (repo / ".claude" / "worktrees" / "feat-p").resolve()
+        assert Path(stamp.read_text().strip()).resolve() == (repo / ".worktrees" / "feat-p").resolve()
 
     def test_a_failing_provision_leaves_the_worktree_usable(self, repo: Path, env: dict[str, str]) -> None:
         """A missing toolchain must not cost the branch — the tree is the expensive part."""
@@ -585,7 +584,7 @@ class TestProvision:
 
         assert result.returncode == 0, result.stderr
         assert "provision.sh failed" in result.stdout
-        assert (repo / ".claude" / "worktrees" / "feat-p").is_dir()
+        assert (repo / ".worktrees" / "feat-p").is_dir()
 
     def test_no_provision_script_is_reported_not_fatal(self, repo: Path, env: dict[str, str]) -> None:
         result = _run_wt(repo, "feat-p", env)
@@ -605,7 +604,8 @@ class TestRepoResolution:
         nested = repo / ".tooling"
         subprocess.run(["git", "init", "-q", "-b", "main", str(nested)], check=True, env=env)
         (nested / "scripts").mkdir()
-        shutil.copy(WT_SH, nested / "scripts" / "wt.sh")
+        for sibling in ("wt.sh", "wt_slots.py", "worktree_paths.py", "agent.py"):
+            shutil.copy(WT_SH.parent / sibling, nested / "scripts" / sibling)
         (nested / "seed.txt").write_text("x\n")
         _git(nested, "add", "-A", env=env)
         _git(nested, "commit", "-qm", "seed", env=env)
@@ -619,7 +619,7 @@ class TestRepoResolution:
         )
 
         assert result.returncode == 0, result.stderr
-        assert (repo / ".claude" / "worktrees" / "feat-n").is_dir()
+        assert (repo / ".worktrees" / "feat-n").is_dir()
         assert not (nested / ".claude").exists(), "the worktree was cut in the tooling clone"
 
     def test_wt_repo_dir_overrides_the_cwd(self, tmp_path: Path, repo: Path, env: dict[str, str]) -> None:
@@ -635,4 +635,18 @@ class TestRepoResolution:
         )
 
         assert result.returncode == 0, result.stderr
-        assert (repo / ".claude" / "worktrees" / "feat-e").is_dir()
+        assert (repo / ".worktrees" / "feat-e").is_dir()
+
+
+class TestLegacyLayout:
+    def test_refresh_repair_and_removal_keep_legacy_location(self, repo, env):
+        legacy = repo / ".claude" / "worktrees" / "legacy"
+        _git(repo, "worktree", "add", "-b", "legacy", str(legacy), "origin/main", env=env)
+        for action in ("headless", "repair"):
+            result = _run_wt(repo, "legacy", env, action=action)
+            assert result.returncode == 0, result.stderr
+            assert legacy.exists()
+            assert not (repo / ".worktrees" / "legacy").exists()
+        assert (legacy / ".worktree.env").is_file()
+        assert _run_wt(repo, "legacy", env, action="rm").returncode == 0
+        assert not legacy.exists()

@@ -12,8 +12,8 @@ description; if the diff and the description disagree, that is a finding.
 
 Procedure:
 
-1. Read `CLAUDE.md`, then Read the `.claude/skills/*/SKILL.md` for each area the
-   diff touches (the skills index table in CLAUDE.md maps areas to skills).
+1. Read `AGENTS.md`, then Read the `.agents/skills/*/SKILL.md` for each area the
+   diff touches (the skills index table in AGENTS.md maps areas to skills).
    Bash is for read-only context only (`git log`, `git show`, `gh pr view`) —
    never edit, commit, or push anything.
 2. **Spec fit** — does the diff actually accomplish the stated task? Any gaps,

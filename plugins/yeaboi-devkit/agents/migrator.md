@@ -22,7 +22,7 @@ Rules:
 - Verify with `make test-fast` and `make lint`; fix only breakage your own
   changes caused.
 - Commit with a lowercase imperative message ending in the Co-Authored-By
-  trailer from CLAUDE.md's Git Conventions. Never push; the orchestrator
+  trailer from AGENTS.md's Git Conventions. Never push; the orchestrator
   aggregates.
 
 Report per-file status: migrated / skipped (why) / failed (why), plus the

@@ -5,8 +5,8 @@ description: How every yeaboi repo is wired to the shared tooling — the Make-t
 
 # The shared repo workflow
 
-Five repos — `yeaboi` (all the Python), `yeaboi-frontend`, `yeaboi-desktop`, `yeaboi-site`,
-`yeaboi-tooling` — run one development workflow. This describes the seams that make that possible,
+Six repos — `yeaboi` (all the Python), `yeaboi-frontend`, `yeaboi-desktop`, `yeaboi-site`,
+`yeaboi-sandbox`, `yeaboi-tooling` — run one development workflow. This describes the seams that make that possible,
 so a change to one of them is made deliberately rather than by copying a neighbour.
 
 ## The interface is Make, not scripts
@@ -27,7 +27,7 @@ an Electron app and a static site.
 | `tooling-sync` `tooling-bump` `tooling-check` | The pin | `mk/common.mk` |
 | `contracts-sync` `contracts-check` | Vendored contracts (no-ops without an upstream) | `mk/common.mk` |
 
-`make tooling-check` fails when a repo is missing one of the first five. A repo that genuinely has no
+`make tooling-check` fails when a repo is missing one of the first six. A repo that genuinely has no
 use for a target drops it from `TOOLING_REQUIRED_TARGETS` **with a reason in the Makefile**, so the
 absence is a decision somebody made rather than a gap.
 
@@ -68,19 +68,19 @@ leave both empty and the targets no-op.
 
 ## The workspace
 
-The five repos are meant to sit side by side under one directory, because some work is one feature in
+The six repos are meant to sit side by side under one directory, because some work is one feature in
 three of them. `workspace.toml` in the tooling repo is the list; `scripts/workspace.py` reads it, and
 `mk/common.mk` exposes it, so these run from **any** repo:
 
 | Target | What it does |
 |---|---|
 | `workspace-setup` | Clone every repo side by side and run each one's `provision.sh`. Idempotent — an existing checkout is left exactly as it is |
-| `workspace-status` | Branch, ahead/behind, working state, `.tooling-rev` and `.contracts-rev`, for all five. Local refs only, so it is instant |
+| `workspace-status` | Branch, ahead/behind, working state, `.tooling-rev` and `.contracts-rev`, for all six. Local refs only, so it is instant |
 | `workspace-env` | The cross-repo dev seams as shell exports: `eval "$(make workspace-env)"` |
 | `wt-new` `wt-sets` `wt-rm` | One feature's worktree across every repo, as one editor window |
 
 The root is the parent of the **main** checkout, not of `$(CURDIR)` — inside a worktree that would be
-`.claude/worktrees/`. Override with `YEABOI_WORKSPACE`.
+`.worktrees/`. Override with `YEABOI_WORKSPACE`.
 
 `workspace.py` imports nothing outside the standard library and nothing added after 3.9, including
 `tomllib`: it has to run under whatever `python3` a machine already has, and macOS ships 3.9. That is
@@ -103,7 +103,7 @@ built and names the `make` that builds it.
 ### A feature that spans repos
 
 `make wt-new NAME=x` cuts the same-named worktree in every repo, in parallel, and opens all of them
-as one multi-root VS Code window (`<workspace>/.worktrees/x.code-workspace`) running a single claude
+as one multi-root VS Code window (`<workspace>/.worktrees/x.code-workspace`) running a selected Claude or Codex
 session with `--add-dir` over every worktree. `REPOS="yeaboi frontend"` narrows it; `HEADLESS=1`
 skips the window; `make wt-one NAME=x` is the single-repo cut.
 
@@ -115,7 +115,7 @@ path.
 Per-repo cuts inside a set go through `wt-headless`, never `wt-new` — `wt-new` is the set command, so
 that would recurse, and `wt-headless` is the one worktree target every repo already has at whatever
 `.tooling` pin it is on, so a set can be cut before the siblings bump. Headless also means wt.sh
-writes no per-folder `.vscode/`, which is what keeps the window at one claude session rather than one
+writes no per-folder `.vscode/`, which is what keeps the window at one selected Claude or Codex session rather than one
 per root.
 
 Nothing records the set — a recorded one goes stale the moment somebody removes a worktree by
@@ -143,10 +143,10 @@ package at noon and the desktop finds out at its next PR, a fortnight later.
 A red run opens one issue and comments on it thereafter. Fix it in the repo the run names — the
 nightly is not the thing that is wrong.
 
-## `.claude/repo-notes.md`
+## `.agents/repo-notes.md`
 
 The shared commands carry the *procedure*; the repo carries its *facts*. `/ship` and `/sync-main`
-both read `.claude/repo-notes.md` when it exists. It is the one place a repo says:
+both read `.agents/repo-notes.md` when it exists. It is the one place a repo says:
 
 - **Commit** — which pre-commit hook `/ship` step 2 skips, and the `Co-Authored-By` trailer.
 - **Gate** — what `make ship-gate` covers beyond the tests, and any registry a new capability must be
@@ -162,7 +162,7 @@ Keep it short. Anything longer than a page is a skill, not a note.
 
 ## Worktrees
 
-`<main checkout>/.claude/worktrees/<name>` in every repo, cut from freshly fetched `origin/main`.
+`<main checkout>/.worktrees/<name>` in every repo, cut from freshly fetched `origin/main`.
 Always a **new** branch: an existing `<name>`, local or on `origin`, is refused unless `REUSE=1` says
 to continue it, and a reused branch is rebased onto `origin/main` on the way in. `wt.sh` copies
 `.env` from the main checkout and then runs the repo's own `scripts/provision.sh` — that is the seam
@@ -173,3 +173,7 @@ never re-provisions or rewrites `.env`.
 The scripts resolve the project from `$PWD` (or `WT_REPO_DIR`), never from their own path: they live
 inside `.tooling/`, which is a different git repository, and resolving from `$BASH_SOURCE` would cut
 every worktree in the tooling repo. `mk/common.mk` passes `WT_REPO_DIR=$(CURDIR)` for that reason.
+
+New worktrees use `.worktrees/<name>`. Existing `.claude/worktrees/<name>` trees remain supported in place.
+Leave `AGENT` unset to offer both editor tasks; `AGENT=claude` or `AGENT=codex` auto-starts one.
+Run `make agent-setup` before launching Codex directly on a fresh checkout.

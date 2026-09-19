@@ -24,7 +24,6 @@ import concurrent.futures
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -35,6 +34,8 @@ from pathlib import Path
 # run by path (`python3 .tooling/scripts/workspace.py`), so it is not importable
 # any other way.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent
+import worktree_paths
 import wt_slots  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -373,17 +374,15 @@ def worktrees(path: Path) -> list[str]:
     NAME the wt- targets take. Each worktree carries a pinned ``.tooling``
     clone; that is a checkout, not a worktree of this repo, and is never a name.
     """
-    home = path / ".claude" / "worktrees"
-    if not home.is_dir():
-        return []
+    homes = [path / layout for layout in worktree_paths.LAYOUTS]
     # Descending no further than the first `.git` is what keeps this off every
     # node_modules and .venv in the workspace — a walk of the whole tree takes
     # minutes. A nested name's parent holds no `.git`, so nesting still works;
     # the depth cap covers the tree whose `.git` went but whose node_modules
     # stayed, where there is no `.git` to stop at.
-    found, stack = [], [(home, 0)]
+    found, stack = [], [(home, home, 0) for home in homes if home.is_dir()]
     while stack:
-        current, depth = stack.pop()
+        current, home, depth = stack.pop()
         try:
             entries = list(current.iterdir())
         except OSError:  # unreadable, or removed while we walked — not a name either way
@@ -394,8 +393,8 @@ def worktrees(path: Path) -> list[str]:
             if (entry / ".git").exists():
                 found.append(entry.relative_to(home).as_posix())
             elif depth + 1 < MAX_NAME_DEPTH:
-                stack.append((entry, depth + 1))
-    return sorted(found)
+                stack.append((entry, home, depth + 1))
+    return sorted(set(found))
 
 
 # --- one feature, every repo -------------------------------------------------
@@ -409,8 +408,7 @@ def worktrees(path: Path) -> list[str]:
 # current `.tooling` pin, so a set can be cut before the siblings bump.
 #
 # Because those cuts are headless, wt.sh writes no per-folder `.vscode/`. The
-# multi-root window therefore has exactly one `folderOpen` task, and so exactly
-# one claude session — not one per root, five of them racing for the terminal.
+# multi-root window offers both CLIs and auto-starts at most one selected session.
 
 TOOLING_DIR = ".tooling"
 # Segments a worktree name may have. It is a branch name — one or two in
@@ -429,42 +427,18 @@ def code_workspace(root: Path, name: str) -> Path:
 
 
 def write_code_workspace(root: Path, name: str, folders: list[tuple[str, Path]]) -> Path:
-    """One window over every repo's worktree, with one claude session over the lot.
+    """One window over every repo's worktree, with launch tasks for both assistants.
 
     `--add-dir` is what makes that session more than the folder it started in.
     The cwd is the first folder, which is workspace.toml order, which is the
     Python repo — the one whose contracts the others vendor.
     """
-    primary = folders[0][1]
-    others = [str(path) for _, path in folders[1:]]
-    command = "claude"
-    if others:
-        command += " --add-dir " + " ".join(shlex.quote(path) for path in others)
     spec = {
         "folders": [{"name": label, "path": str(path)} for label, path in folders],
-        # Workspace-scoped, exactly as wt.sh writes it per folder: this is what
-        # skips VS Code's "allow automatic tasks?" prompt. Workspace Trust still
-        # asks once per unseen folder, and there is no setting that answers it.
         "settings": {"task.allowAutomaticTasks": "on"},
         "tasks": {
             "version": "2.0.0",
-            "tasks": [
-                {
-                    "label": "claude",
-                    "type": "shell",
-                    "command": command,
-                    "options": {"cwd": str(primary)},
-                    "presentation": {
-                        "reveal": "always",
-                        "panel": "new",
-                        "focus": True,
-                        "clear": True,
-                        "showReuseMessage": False,
-                    },
-                    "runOptions": {"runOn": "folderOpen"},
-                    "problemMatcher": [],
-                }
-            ],
+            "tasks": agent.editor_tasks([path for _, path in folders], os.getenv("AGENT", "")),
         },
     }
     path = code_workspace(root, name)
@@ -493,12 +467,16 @@ def drop_folder_task(tree: Path) -> None:
 
     A headless cut never writes one, so this only bites on a worktree that
     already existed from `make wt-one`: in a multi-root window its folderOpen
-    task would start a second claude beside the workspace-level one. The file is
-    generated and gitignored, so there is nothing here to lose.
+    task could start a second assistant beside the workspace-level one. Preserve
+    other tasks and disable only assistant auto-launches.
     """
     tasks = tree / ".vscode" / "tasks.json"
-    if tasks.is_file() and "folderOpen" in tasks.read_text():
-        tasks.unlink()
+    if tasks.is_file():
+        spec = json.loads(tasks.read_text())
+        for task in spec.get("tasks", []):
+            if task.get("label") in agent.TASK_LABELS:
+                task.pop("runOptions", None)
+        tasks.write_text(json.dumps(spec, indent=2) + "\n")
 
 
 def open_workspace(path: Path, name: str) -> bool:
@@ -513,11 +491,12 @@ def open_workspace(path: Path, name: str) -> bool:
         return False
     if not run([editor, "-n", str(path)]):
         return False
-    print(f"[workspace] opened '{name}' in {editor}; claude auto-starts in the integrated terminal")
+    print(f"[workspace] opened '{name}' in {editor}; choose agent: claude or agent: codex from Run Task")
     return True
 
 
 def cmd_wt_set(args: argparse.Namespace) -> int:
+    agent.editor_tasks([Path.cwd()], os.getenv("AGENT", ""))
     root = workspace_root(args.root)
     # No --repos means the whole workspace. That is the common case and the
     # reason `make wt-new NAME=x` needs no second argument.
@@ -568,7 +547,7 @@ def cmd_wt_set(args: argparse.Namespace) -> int:
             if not ok:
                 failed.append(repo.name)
 
-    # Manifest order, not completion order: the first folder is where the claude
+    # Manifest order, not completion order: the first folder is where the selected
     # session starts, and which repo that is must not depend on which npm ci won.
     cut = [repo for repo in present if repo.name not in failed]
     print()
@@ -577,7 +556,7 @@ def cmd_wt_set(args: argparse.Namespace) -> int:
     if not cut:
         return 1
 
-    folders = [(repo.name, root / repo.dir / ".claude" / "worktrees" / args.name) for repo in cut]
+    folders = [(repo.name, worktree_paths.target(root / repo.dir, args.name)) for repo in cut]
     for _, tree in folders:
         drop_folder_task(tree)
     path = write_code_workspace(root, args.name, folders)
@@ -651,7 +630,7 @@ def cmd_wt_siblings(args: argparse.Namespace) -> int:
     print(f"[workspace] worktree {name!r} exists in {len(carrying)} repo(s):")
     owing = []
     for repo in carrying:
-        state = unshipped(root / repo.dir / ".claude" / "worktrees" / name)
+        state = unshipped(worktree_paths.target(root / repo.dir, name))
         print(f"  {repo.name:<16} {state}")
         if state not in ("clean", "unknown"):
             owing.append(repo.name)
@@ -677,7 +656,7 @@ def standing_in(root: Path, chosen: list[Repo], names: list[str]) -> str | None:
         return None
     for name in sorted(names, key=len, reverse=True):
         for repo in chosen:
-            tree = (root / repo.dir / ".claude" / "worktrees" / name).resolve()
+            tree = (worktree_paths.target(root / repo.dir, name)).resolve()
             if tree == cwd or tree in cwd.parents:
                 return name
     return None
