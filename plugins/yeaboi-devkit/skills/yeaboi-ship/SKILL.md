@@ -125,10 +125,13 @@ continuing. Never skip the verification steps.
    its review does not exist. The `code-reviewer` pass in step 4 is not it — that one had no CI
    results, no diff-on-`main` context, and nobody else's eyes.
 
-   Name the follow-up: `/pr-feedback <n>` once CI is green, or `/babysit-prs` across every open PR.
-   Do not wait for it here; a `/ship` that blocks for ten minutes gets run less often.
+   Name the follow-up: `make review-feedback PR=<n>` and the `yeaboi-review-feedback` skill
+   once CI is green. These work in every repo and include Claude, native Codex, and human
+   feedback. Where available, `/pr-feedback` and `/babysit-prs` remain local shortcuts.
+   Codex feedback is advisory: never wait for a native completion marker or treat missing
+   output as a clean review. Do not wait for reviews in this shipping step.
 
-   **On a branch you are shipping by hand, that review is advisory and the `pr-feedback` status stays
+   **In repos with the `pr-feedback` gate, on a branch you are shipping by hand, that review is advisory and the status stays
    green.** It runs once, posts what it found, and does not hold the merge — you are the person it
    would otherwise be arguing with. Read it anyway; that is the whole point of it existing. The gate
    enforces on the unattended lane, whose branch prefixes and labels `.agents/repo-notes.md` names,

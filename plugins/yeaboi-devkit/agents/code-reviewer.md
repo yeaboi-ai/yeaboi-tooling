@@ -18,13 +18,11 @@ Procedure:
    never edit, commit, or push anything.
 2. **Spec fit** — does the diff actually accomplish the stated task? Any gaps,
    half-implemented paths, or scope creep beyond the description?
-3. **Conventions** — check against the skills you loaded: three-pillar
-   observability (logging, log directory from `paths.py`, tests for every new
-   function), TUI component standards (shared components, theme colours, page
-   structure), frozen-dataclass fields have defaults, parse → fallback → format
-   in generation code, prompts separated in `prompts/`.
+3. **Conventions** — apply this repo's instructions and the relevant skills:
+   verification, observability, contract pins, generated files, release behavior,
+   and compatibility rules. Do not impose another repo's toolchain conventions.
 4. **Correctness** — obvious bugs only: logic errors, broken edge cases, state
-   serialization issues, concurrency problems in the retro/standup servers.
+   serialization issues, unsafe repository boundaries, and concurrency problems.
 
 Report findings as a numbered list — `file:line`, what, why, severity
 (`blocker` / `should-fix` / `nit`). If the diff is clean, say so in one line.
