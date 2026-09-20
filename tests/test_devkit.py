@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "yeaboi-devkit"
 COMMANDS = sorted((PLUGIN / "commands").glob("*.md"))
 AGENTS = sorted((PLUGIN / "agents").glob("*.md"))
-PROSE = COMMANDS + AGENTS
+PROSE = list((PLUGIN / "skills").glob("yeaboi-*/SKILL.md")) + AGENTS
 
 
 def _read(path: Path) -> str:
@@ -289,7 +289,7 @@ class TestNoCommandTrustsLocalMain:
 
 
 class TestShipRunsTheGate:
-    SHIP = PLUGIN / "commands" / "ship.md"
+    SHIP = PLUGIN / "skills" / "yeaboi-ship" / "SKILL.md"
 
     def test_ship_names_the_gate(self):
         assert "make ship-gate" in _read(self.SHIP)
@@ -305,7 +305,7 @@ class TestShipRunsTheGate:
         text = _read(self.SHIP)
         assert "wt-siblings" in text, "/ship must look for the rest of the set"
         assert "generates" in text and "merges first" in text, "/ship must say which repo of a set goes first"
-        fenced = re.search(r"^[ \t]*```\n[ \t]*make wt-siblings NAME=<name>\n[ \t]*```", text, re.MULTILINE)
+        fenced = re.search(r"^[ \t]*```\n[ \t]*make wt-siblings\n[ \t]*```", text, re.MULTILINE)
         assert fenced, "the sibling scan should be shown as a single fenced command"
         assert text.index("gh pr create") < fenced.start(), (
             "the sibling scan is a post-ship advisory — it must come after the PR is opened"
@@ -346,7 +346,7 @@ class TestShipRunsTheGate:
     def test_ship_and_sync_main_defer_repo_facts_to_repo_notes(self):
         """The procedure is shared; the facts are not. Inlining one repo's facts breaks the others."""
         for name in ("ship.md", "sync-main.md"):
-            assert ".claude/repo-notes.md" in _read(PLUGIN / "commands" / name), (
+            assert ".agents/repo-notes.md" in _read(PLUGIN / "skills" / f"yeaboi-{Path(name).stem}" / "SKILL.md"), (
                 f"{name} no longer points at the per-repo notes — either it inlined a repo's facts, "
                 "or the seam was renamed and this guard is the only thing that noticed"
             )

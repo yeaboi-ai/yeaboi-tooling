@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# wt.sh <name> [open|headless|rm|repair] — git-worktree lifecycle for parallel Claude sessions.
+# wt.sh <name> [open|headless|rm|repair] — git-worktree lifecycle for parallel AI sessions.
 #
 # This is the SINGLE-REPO half. `make wt-new` cuts one feature across the whole
 # workspace and drives this script once per repo (headless) through
 # scripts/workspace.py, which then opens them as one multi-root window.
 #
-#   make wt-one NAME=my-feature       -> create .claude/worktrees/my-feature + provision + open VS Code
+#   make wt-one NAME=my-feature       -> create .worktrees/my-feature + provision + open VS Code
 #   make wt-headless NAME=my-feature  -> same, WITHOUT VS Code auto-launch; for worktrees driven by
-#                                        background agents from an orchestrating Claude session
+#                                        background agents from an orchestrating assistant session
 #   make wt-one-rm NAME=my-feature    -> remove worktree dir + git branch
 #
 # Lives in the shared tooling repo and is reached at `.tooling/scripts/wt.sh`,
@@ -41,7 +41,7 @@
 # own `scripts/provision.sh` if it has one — that is the seam where a Python
 # repo makes a venv, a Node repo runs `npm ci`, and a static site does nothing.
 # Except for headless, .vscode/ auto-launch files are written so opening the
-# folder starts a claude session.
+# folder offers Claude and Codex launch tasks.
 #
 # Editor CLI comes from $CODE (default: code) — e.g. `CODE=cursor make wt-one NAME=my-feature`.
 
@@ -70,7 +70,7 @@ git -C "$REPO_DIR" config core.bare false 2>/dev/null || true
 ROOT="$(git -C "$REPO_DIR" rev-parse --show-toplevel)"
 # Always operate against the MAIN checkout, even when invoked from inside a
 # worktree (the main worktree is the first `git worktree list` entry).
-ROOT="$(git -C "$ROOT" worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+ROOT="$(git -C "$ROOT" worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 
 # Guard the mistake this script's path invites: run from `.tooling/` and every
 # worktree would be cut in the tooling repo instead of the project.
@@ -80,7 +80,15 @@ if [ -f "$ROOT/.claude-plugin/marketplace.json" ] && [ -d "$ROOT/mk" ] && [ -z "
   exit 1
 fi
 
-TARGET="$ROOT/.claude/worktrees/$NAME"
+case "${AGENT:-}" in
+  ""|claude|codex) ;;
+  *) echo "[wt] AGENT must be claude or codex" >&2; exit 1 ;;
+esac
+TARGET="$(python3 "$SCRIPT_DIR/worktree_paths.py" "$ROOT" "$NAME")"
+case "$TARGET" in
+  "$ROOT/.claude/worktrees/"*) WT_HOME="$ROOT/.claude/worktrees" ;;
+  *) WT_HOME="$ROOT/.worktrees" ;;
+esac
 
 # --- .worktree.env: this worktree's private ports and data home ---------------
 # Worktrees share a machine, so they share every fixed port and everything under
@@ -110,7 +118,6 @@ registered_under() {  # registered worktree paths strictly below $1
 }
 
 if [ "$ACTION" = "rm" ]; then
-  WT_HOME="$ROOT/.claude/worktrees"
   # A '/' in NAME nests the worktree (desktop/feature), which makes the parent
   # path (.claude/worktrees/desktop) a plain directory HOLDING worktrees. git
   # refuses to remove that — silently, under the `|| true` — and the rm -rf
@@ -315,7 +322,7 @@ if [ ! -d "$TARGET" ]; then
     fi
     # And the directory shape of the same collision: if '$p' is itself a
     # registered worktree, '$NAME' would be cut INSIDE its working tree.
-    if wt_registered "$ROOT/.claude/worktrees/$p"; then
+    if wt_registered "$WT_HOME/$p"; then
       echo "[wt] refusing: worktree '$p' exists — '$NAME' would land inside its working tree" >&2
       exit 1
     fi
@@ -379,42 +386,6 @@ if [ ! -d "$TARGET" ]; then
     echo "[wt] note: no scripts/provision.sh — worktree created without toolchain setup"
   fi
 
-  # --- .vscode/: auto-launch claude in the integrated terminal on folder open --
-  # `runOn: folderOpen` + workspace-scoped `task.allowAutomaticTasks: on` skips
-  # VS Code's "allow automatic tasks?" prompt. The Workspace Trust prompt is
-  # unavoidable on first open of any folder; trust once and it sticks.
-  # Skipped for headless worktrees — those are driven by background agents,
-  # not a human-attended editor window.
-  if [ "$ACTION" != "headless" ]; then
-  mkdir -p "$TARGET/.vscode"
-  cat > "$TARGET/.vscode/settings.json" <<'EOF'
-{
-  "task.allowAutomaticTasks": "on"
-}
-EOF
-  # Add --dangerously-skip-permissions to the command for unattended fan-out runs.
-  cat > "$TARGET/.vscode/tasks.json" <<'EOF'
-{
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "claude",
-      "type": "shell",
-      "command": "claude",
-      "presentation": {
-        "reveal": "always",
-        "panel": "new",
-        "focus": true,
-        "clear": true,
-        "showReuseMessage": false
-      },
-      "runOptions": { "runOn": "folderOpen" },
-      "problemMatcher": []
-    }
-  ]
-}
-EOF
-  fi
 elif ! wt_registered "$TARGET"; then
   # The directory exists but git does not register it as a worktree. Two ways
   # here: NAME is a PREFIX of nested worktrees (.claude/worktrees/desktop while
@@ -424,7 +395,7 @@ elif ! wt_registered "$TARGET"; then
   NESTED="$(registered_under "$TARGET")"
   if [ -n "$NESTED" ]; then
     echo "[wt] refusing: '$NAME' is not a worktree — it is a directory holding these worktrees:" >&2
-    printf '%s\n' "$NESTED" | sed "s|^$ROOT/.claude/worktrees/|       |" >&2
+    printf '%s\n' "$NESTED" | sed "s|^$WT_HOME/|       |" >&2
     echo "     pick a name that is not a prefix of an existing worktree" >&2
   else
     echo "[wt] refusing: $TARGET exists but is not a registered worktree (stale debris?)" >&2
@@ -434,11 +405,19 @@ elif ! wt_registered "$TARGET"; then
 else
   # The refresh. Re-running the same command is how a feature's worktrees are
   # brought back onto the latest base — `make wt-new NAME=x` a second time does it
-  # for all five at once. Only the base moves: provisioning, .env and .vscode/
-  # belong to the creation above and must not be rewritten under a live worktree.
+  # for the whole set. Provisioning and .env belong to creation; editor launch
+  # tasks are refreshed below when opening the worktree.
   resolve_base
   sync_local_default
   rebase_onto_base
+fi
+
+# Populate skills before the first direct CLI/editor launch, including headless cuts.
+if [ -f "$TARGET/.tooling-rev" ]; then
+  (cd "$TARGET" && bash scripts/tooling-sync.sh)
+  python3 "$SCRIPT_DIR/agent_setup.py" --root "$TARGET" --tooling "$TARGET/.tooling"
+elif [ -d "$TARGET/plugins/yeaboi-devkit/skills" ]; then
+  python3 "$SCRIPT_DIR/agent_setup.py" --root "$TARGET" --tooling "$TARGET"
 fi
 
 echo "[wt] worktree ready: $TARGET"
@@ -447,6 +426,7 @@ if [ "$ACTION" = "headless" ]; then
 fi
 
 if [ "$ACTION" = "open" ]; then
+  python3 "$SCRIPT_DIR/agent.py" editor --root "$TARGET" --agent "${AGENT:-}"
   CODE="${CODE:-code}"
   if ! command -v "$CODE" >/dev/null 2>&1; then
     echo "[wt] '$CODE' CLI not found on PATH." >&2
@@ -455,5 +435,5 @@ if [ "$ACTION" = "open" ]; then
     exit 1
   fi
   "$CODE" -n "$TARGET"
-  echo "[wt] opened $NAME in $CODE; claude auto-starts in the integrated terminal"
+  echo "[wt] opened $NAME in $CODE; choose agent: claude or agent: codex from Run Task (AGENT selects auto-start)"
 fi

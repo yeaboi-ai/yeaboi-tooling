@@ -4,7 +4,7 @@
 
 # 🤙 yeaboi-tooling
 
-**The development workflow every yeaboi repo shares, in one place: the Claude Code commands and agents, the hooks that verify a turn, the Make fragments, and the worktree scripts.**
+**The development workflow every yeaboi repo shares, in one place: the shared Claude Code and Codex procedures, the hooks that verify a turn, the Make fragments, and the worktree scripts.**
 
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 [![Part of yeaboi](https://img.shields.io/badge/part%20of-yeaboi-ff6600?style=for-the-badge)](https://github.com/yeaboi-ai/yeaboi.ai)
@@ -16,19 +16,83 @@
 ---
 
 <div align="center">
-<img src="https://yeaboi.ai/demo-tooling.gif" alt="A terminal running make workspace-status, showing branch, working state and both pins across all five yeaboi repos, then make wt-list" width="800"/>
+<img src="https://yeaboi.ai/demo-tooling.gif" alt="A terminal running make workspace-status, showing branch, working state and both pins across all six yeaboi repos, then make wt-list" width="800"/>
 
-*Five checkouts, one command. `make demo` re-records this from `demo_spec.py`.*
+*Six checkouts, one command. `make demo` re-records this from `demo_spec.py`.*
 </div>
 
 ---
 
+## Claude Code and Codex
+
+Both CLIs read the root `AGENTS.md` natively; repository details live in `.agents/repo-notes.md`.
+Claude Code requires version 2.1.277 or later. Shared procedures have one implementation in the
+devkit's skills. Claude's existing slash commands read those skills, and `make agent-setup` links
+the pinned skills into Codex's
+`.agents/skills` discovery path. Repo-specific skills are tracked in `.agents/skills`, with Claude
+compatibility links. Never copy procedures into a second provider-specific implementation.
+
+Claude defaults to `AGENTS.md` when there is no project or ancestor `CLAUDE.md` or
+`CLAUDE.local.md`. If you keep personal project instructions in one of those files, select
+`claude-md-and-agents-md` under `/config` → **Project instructions**. After upgrading Claude,
+start a new session and check `/context` to confirm `AGENTS.md` loaded. See
+[Claude's native AGENTS.md documentation](https://code.claude.com/docs/en/memory#agents-md)
+for availability restrictions. Hosted workflow prompts explicitly read the shared file too.
+
+```sh
+make agent-setup                         # first checkout / after bumping the tooling pin
+make agent-check                         # skill links, CLI availability, login/trust guidance
+make wt-new NAME=feature-x               # one editor window; offers both launch tasks
+make wt-new NAME=feature-x AGENT=codex    # auto-start only Codex
+make wt-open NAME=feature-x AGENT=claude  # switch the launch choice on an existing tree
+make agent AGENT=codex                   # use the current checkout
+make agent AGENT=claude TASK=yeaboi-ship  # same shipping procedure
+make review-feedback PR=123              # includes native Codex's advisory feedback
+```
+
+New trees live in `<main>/.worktrees/<name>`. Existing `.claude/worktrees/<name>` trees
+stay where they are and work with the same lifecycle commands. Mixed sets are supported.
+A name present in both layouts is ambiguous and must be resolved by explicit Git paths; scripts
+never choose one to delete. Ports, private data homes, nested names and the tagged stash stack
+remain shared contracts. `HEADLESS=1` creates trees without opening an editor or launching an AI.
+Generated editor tasks preserve unrelated user tasks and start at most one selected assistant.
+
+Codex uses its normal ChatGPT CLI login (`codex login`), with no API-key provisioning here.
+Review project hooks with `/hooks` after trusting the project: formatting, scoped checks and
+stash protection adapt to Codex's payloads and delegate to the existing shared scripts.
+`make verify-changes` is the explicit lint + scoped-test fallback; `make ship-gate` remains authoritative.
+Do not bypass the CLI sandbox or hook trust. Models remain a user preference.
+
+### Reviews and hosted automation
+
+- Claude reviews run after successful CI. The reusable workflow is consumed at the same tooling
+  commit as the Make targets; yeaboi.ai retains its existing stricter feedback workflow.
+- Enable native Codex automatic code review for all six repositories in
+  [Codex code review settings](https://chatgpt.com/codex/cloud/settings/code-review), after connecting
+  GitHub. Choose **On PR open**, keep exhaustive review off, and keep credit overage off. This uses
+  the subscription and runs independently of CI; it does not share Claude's after-CI timing.
+- Codex findings are advisory initially. No missing completion marker, reaction, or unavailable
+  native review holds a merge. Human review and the existing unattended Claude gate remain intact.
+- Each repo needs the Claude GitHub App and `CLAUDE_CODE_OAUTH_TOKEN` available to its review
+  workflow. Secrets are configured in GitHub, never committed or copied out of a local login.
+- Hosted writer bots stay on Claude. The `development-automation` skill in yeaboi.ai and desktop
+  runs their existing procedures from either local CLI. For example:
+  `make agent AGENT=codex TASK=development-automation ARGS="diagnose CI run 123"`.
+  `make agent-run` is the corresponding non-interactive invocation, with the same eligibility
+  and approval gates. It does not install a local scheduler or export credentials to CI.
+
+Ship tooling first, then bump each consumer's `.tooling-rev` and reusable-workflow reference to
+that commit. Run `make agent-setup` after the bump. Roll back by restoring both pins together;
+legacy worktrees need no migration in either direction. Account-level native review settings are
+an independent rollout step and can be disabled without changing required checks.
+
 ## What this is
 
-Five repos consume it — [`yeaboi`](https://github.com/yeaboi-ai/yeaboi.ai) (all the Python: engines,
+Six repos consume it — [`yeaboi`](https://github.com/yeaboi-ai/yeaboi.ai) (all the Python: engines,
 TUI, CLI, MCP, Slack), [`yeaboi-frontend`](https://github.com/yeaboi-ai/yeaboi-frontend),
 [`yeaboi-desktop`](https://github.com/yeaboi-ai/yeaboi-desktop),
-[`yeaboi-site`](https://github.com/yeaboi-ai/yeaboi-site), and this one.
+[`yeaboi-site`](https://github.com/yeaboi-ai/yeaboi-site),
+[`yeaboi-sandbox`](https://github.com/yeaboi-ai/yeaboi-sandbox), and this one.
 
 ## The two halves
 
@@ -39,8 +103,8 @@ agents, the `repo-workflow` skill, and the PostToolUse + Stop hooks.
 **A pinned clone** (`mk/`, `scripts/`, `bootstrap/`), consumed as a gitignored `.tooling/` checkout at
 the sha in each repo's `.tooling-rev`. Carries the shared Make targets and the worktree lifecycle.
 
-Two halves because they are installed by different things: Claude installs a plugin, `make` needs
-files on disk.
+Claude installs the plugin adapter; `make` uses the pinned clone. Both read the shared
+procedures in `plugins/yeaboi-devkit/skills/`, exposed to Codex by `make agent-setup`.
 
 ## The one rule
 
@@ -54,12 +118,12 @@ The contract, and everything else about how the seams work, is in the `repo-work
 
 ## The workspace
 
-Five repos make one product, so `workspace.toml` names them and `scripts/workspace.py` treats the
+Six repos make one product, so `workspace.toml` names them and `scripts/workspace.py` treats the
 sibling checkouts as one thing. The targets come from `mk/common.mk`, so they work from **any** repo
 in the workspace, not only from this one:
 
 ```bash
-make workspace-setup    # clone all five side by side and provision each (idempotent)
+make workspace-setup    # clone all six side by side and provision each (idempotent)
 make workspace-status   # branch, working state and both pins, across every repo
 eval "$(make workspace-env)"   # wire one checkout to another (see below)
 ```
@@ -82,11 +146,11 @@ falling back and an absent interpreter is a sidecar that never starts.
 ### One feature across every repo
 
 One product, so one feature is one branch name everywhere. `wt-new` cuts it in every repo at once —
-in parallel — and opens all of them as a **single** multi-root VS Code window with **one** claude
-session that can see every worktree:
+in parallel — and opens all of them as a single multi-root VS Code window with launch tasks
+for Claude and Codex. Set `AGENT=claude` or `AGENT=codex` to start one automatically:
 
 ```bash
-make wt-new NAME=poker-export                           # all five, one window
+make wt-new NAME=poker-export                           # all six, one window
 make wt-new NAME=poker-export REPOS="yeaboi frontend"   # narrow it to a few
 make wt-new NAME=poker-export HEADLESS=1                # cut them, open no editor
 make wt-new NAME=poker-export                           # again: rebase them all onto origin/main
@@ -130,9 +194,9 @@ exists.
    `test-fast`, `test-scoped`, `ship-gate` below it (a Node repo can `include $(TOOLING)/mk/node.mk`
    and get them).
 3. Write `.tooling-rev` with a sha of this repo (`make tooling-bump` does it), and add `.tooling/`
-   and `.claude/worktrees/` to `.gitignore`.
+   and `.worktrees/` to `.gitignore`.
 4. Add `extraKnownMarketplaces` + `enabledPlugins` to its `.claude/settings.json` — copy this repo's.
-5. Add `scripts/provision.sh` (what a fresh worktree of it needs) and `.claude/repo-notes.md` (the
+5. Add `scripts/provision.sh` (what a fresh worktree of it needs) and `.agents/repo-notes.md` (the
    facts `/ship` and `/sync-main` ask for).
 6. Run `make tooling-check` and put it in the repo's CI.
 7. Add a `[[repo]]` row to `workspace.toml` — that is what puts it in `make workspace-setup`,

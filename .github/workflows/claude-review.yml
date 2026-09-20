@@ -1,0 +1,64 @@
+name: Shared Claude Review
+
+on:
+  workflow_call:
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+jobs:
+  review:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      actions: read
+      id-token: write
+    steps:
+      - id: pr
+        name: Resolve an eligible PR at the tested head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq \
+            '[.[] | select((.state == "open" or .merged_at != null) and .draft == false)][0]')
+          [ "$pr" != null ] || exit 0
+          [ "$(jq -r '.head.sha' <<< "$pr")" = "$SHA" ] || exit 0
+          case "$(jq -r '.user.login' <<< "$pr")" in
+            'dependabot[bot]'|'github-actions[bot]') exit 0 ;;
+          esac
+          number=$(jq -r '.number' <<< "$pr")
+          rounds=$(gh api "repos/$REPO/issues/$number/comments" --paginate --slurp --jq \
+            '[.[][] | select(.user.login == "claude[bot]") | .body
+              | capture("<!-- pr-feedback: claude-review open=(?<n>[0-9]+)")
+              | select(.n != "0")] | length')
+          [ "$rounds" -lt 1 ] || exit 0
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.pr.outputs.number != ''
+        with:
+          persist-credentials: false
+      - name: Review
+        if: steps.pr.outputs.number != ''
+        uses: anthropics/claude-code-action@e2a4b761cd77a1138a5b41410eda9b28581f9bcd # v1.0.196
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true
+          prompt: |
+            Review PR #${{ steps.pr.outputs.number }} in ${{ github.repository }}.
+            CI passed. Read AGENTS.md and .agents/repo-notes.md, then the PR diff,
+            description, existing comments and relevant repository skills.
+            Focus on consequential correctness, security and compatibility defects.
+            Do not repeat findings already answered with a sound reason. Verify claimed fixes.
+            Do not repeat mechanical checks covered by CI. Do not modify code or merge.
+            Post one concise advisory comment, including file/line and impact for each finding.
+            End with <!-- pr-feedback: claude-review open=N critical=M -->, where N counts
+            actionable findings and M is the subset that would ship a serious defect.
+            A clean review has open=0 critical=0. Never approve or request changes.
+          claude_args: >-
+            --max-turns 40 --allowed-tools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment ${{ steps.pr.outputs.number }}:*)"

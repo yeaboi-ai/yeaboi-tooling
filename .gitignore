@@ -20,3 +20,14 @@ __pycache__/
 
 # Feature clips render here; only the spec in .demo/clips/ is committed.
 .demo/out/
+
+.worktrees/
+
+.agents/skills/yeaboi-*
+
+.agents/skills/repo-workflow
+
+# Per-worktree assistant launch choices and generated port assignments.
+/.vscode/tasks.json
+/.vscode/settings.json
+/.worktree.env

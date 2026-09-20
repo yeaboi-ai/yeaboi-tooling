@@ -82,13 +82,14 @@ def repo(tmp_path: Path, env: dict[str, str]) -> Path:
 
     scripts = work / "scripts"
     scripts.mkdir()
-    shutil.copy(SCRIPTS / "wt.sh", scripts / "wt.sh")
+    for sibling in ("wt.sh", "wt_slots.py", "worktree_paths.py", "agent.py"):
+        shutil.copy(SCRIPTS / sibling, scripts / sibling)
     shutil.copy(SCRIPTS / "wt-issue.sh", scripts / "wt-issue.sh")
     (work / "f.txt").write_text("one\n")
     _git(work, "add", "-A", env=env)
     _git(work, "commit", "-qm", "one", env=env)
     _git(work, "push", "-q", "-u", "origin", "main", env=env)
-    (work / ".git" / "info" / "exclude").write_text(".claude/worktrees/\n")
+    (work / ".git" / "info" / "exclude").write_text(".worktrees/\n")
 
     other = tmp_path / "other"
     subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, env=env)
@@ -122,7 +123,7 @@ class TestResolution:
 
         assert result.returncode == 0, result.stderr
         assert "issue #7" in result.stdout and "'feat-i'" in result.stdout
-        assert (repo / ".claude" / "worktrees" / "feat-i").is_dir()
+        assert (repo / ".worktrees" / "feat-i").is_dir()
         assert _git(repo, "config", "--get", "branch.feat-i.merge", env=env) == "refs/heads/feat-i"
 
     def test_pr_fallback_used_when_gh_develop_fails(self, repo: Path, env: dict[str, str]) -> None:
@@ -132,7 +133,7 @@ class TestResolution:
         result = _run(repo, env, "7", "headless")
 
         assert result.returncode == 0, result.stderr
-        assert (repo / ".claude" / "worktrees" / "feat-i").is_dir()
+        assert (repo / ".worktrees" / "feat-i").is_dir()
 
     def test_multiple_candidates_are_listed_and_fail(self, repo: Path, env: dict[str, str]) -> None:
         _stub_file(env, "develop_list", "feat-i\turl\nfeat-j\turl\n")
@@ -159,7 +160,7 @@ class TestResolution:
 
         assert result.returncode == 1
         assert "does not exist on origin" in result.stderr
-        assert not (repo / ".claude" / "worktrees" / "ghost-branch").exists()
+        assert not (repo / ".worktrees" / "ghost-branch").exists()
 
 
 class TestArgumentValidation:

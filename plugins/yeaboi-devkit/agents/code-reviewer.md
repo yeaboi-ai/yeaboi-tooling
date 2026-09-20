@@ -12,19 +12,17 @@ description; if the diff and the description disagree, that is a finding.
 
 Procedure:
 
-1. Read `CLAUDE.md`, then Read the `.claude/skills/*/SKILL.md` for each area the
-   diff touches (the skills index table in CLAUDE.md maps areas to skills).
+1. Read `AGENTS.md`, then Read the `.agents/skills/*/SKILL.md` for each area the
+   diff touches (the skills index table in AGENTS.md maps areas to skills).
    Bash is for read-only context only (`git log`, `git show`, `gh pr view`) —
    never edit, commit, or push anything.
 2. **Spec fit** — does the diff actually accomplish the stated task? Any gaps,
    half-implemented paths, or scope creep beyond the description?
-3. **Conventions** — check against the skills you loaded: three-pillar
-   observability (logging, log directory from `paths.py`, tests for every new
-   function), TUI component standards (shared components, theme colours, page
-   structure), frozen-dataclass fields have defaults, parse → fallback → format
-   in generation code, prompts separated in `prompts/`.
+3. **Conventions** — apply this repo's instructions and the relevant skills:
+   verification, observability, contract pins, generated files, release behavior,
+   and compatibility rules. Do not impose another repo's toolchain conventions.
 4. **Correctness** — obvious bugs only: logic errors, broken edge cases, state
-   serialization issues, concurrency problems in the retro/standup servers.
+   serialization issues, unsafe repository boundaries, and concurrency problems.
 
 Report findings as a numbered list — `file:line`, what, why, severity
 (`blocker` / `should-fix` / `nit`). If the diff is clean, say so in one line.
