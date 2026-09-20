@@ -144,10 +144,14 @@ def test_make_runs_the_selected_cli_with_literal_task_context(tmp_path, provider
     tooling = Path(__file__).resolve().parents[1]
     (tmp_path / "Makefile").write_text(f"TOOLING := {tooling}\ninclude {tooling}/mk/common.mk\n")
     binary = tmp_path / provider
-    binary.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+    captured = tmp_path / f"{provider}-args.json"
+    binary.write_text(
+        f"#!{sys.executable}\nimport json, pathlib, sys\n"
+        f"pathlib.Path({str(captured)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+    )
     binary.chmod(0o755)
     context = 'inspect "quoted text", $HOME and `touch unexpected`'
-    result = subprocess.run(
+    subprocess.run(
         ["make", "agent-run", f"AGENT={provider}", "TASK=yeaboi-review", f"ARGS={context}"],
         cwd=tmp_path,
         env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
@@ -155,7 +159,7 @@ def test_make_runs_the_selected_cli_with_literal_task_context(tmp_path, provider
         text=True,
         check=True,
     )
-    argv = json.loads(result.stdout.splitlines()[-1])
+    argv = json.loads(captured.read_text())
     assert argv[:2] == ["exec" if provider == "codex" else "--print", "--"]
     assert argv[-1].endswith(f"Task context: {context}")
     assert not (tmp_path / "unexpected").exists()
