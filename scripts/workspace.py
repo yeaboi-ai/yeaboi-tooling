@@ -472,7 +472,7 @@ def drop_folder_task(tree: Path) -> None:
     """
     tasks = tree / ".vscode" / "tasks.json"
     if tasks.is_file():
-        spec = json.loads(tasks.read_text())
+        spec = agent.load_editor_config(tasks)
         for task in spec.get("tasks", []):
             if task.get("label") in agent.TASK_LABELS:
                 task.pop("runOptions", None)
@@ -656,6 +656,8 @@ def standing_in(root: Path, chosen: list[Repo], names: list[str]) -> str | None:
         return None
     for name in sorted(names, key=len, reverse=True):
         for repo in chosen:
+            if not (root / repo.dir).is_dir():
+                continue
             tree = (worktree_paths.target(root / repo.dir, name)).resolve()
             if tree == cwd or tree in cwd.parents:
                 return name

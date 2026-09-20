@@ -69,6 +69,53 @@ def test_skills_are_idempotent_and_never_replace_local_work(tmp_path):
         agent_setup.setup(repo, source)
 
 
+def test_editor_refresh_accepts_jsonc_and_preserves_string_contents(tmp_path):
+    folder = tmp_path / ".vscode"
+    folder.mkdir()
+    command = 'echo "https://example.com/*literal*/,}"'
+    (folder / "tasks.json").write_text(
+        '{ // developer task\n"tasks": [{"label": "build", "command": ' + json.dumps(command) + ",},],}"
+    )
+    (folder / "settings.json").write_text('{ /* preferences */ "editor.tabSize": 4,}')
+    agent.configure_editor(tmp_path)
+    tasks = json.loads((folder / "tasks.json").read_text())["tasks"]
+    assert tasks[0] == {"label": "build", "command": command}
+    assert len(tasks) == 3
+    assert json.loads((folder / "settings.json").read_text())["editor.tabSize"] == 4
+
+
+@pytest.mark.parametrize("invalid", ['{"value": 1/* comment */2}', '{"value": [,,]}'])
+def test_editor_config_rejects_malformed_values(tmp_path, invalid):
+    path = tmp_path / "settings.json"
+    path.write_text(invalid)
+    with pytest.raises(json.JSONDecodeError):
+        agent.load_editor_config(path)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_stop_hook_verifies_the_repository_when_started_from_a_subdirectory(tmp_path, monkeypatch, fail):
+    monkeypatch.delenv("YEABOI_AGENT_ROOTS", raising=False)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    nested = tmp_path / "tests"
+    nested.mkdir()
+    (tmp_path / "changed.py").write_text("changed = True\n")
+    lint = "false" if fail else "echo lint >> verified"
+    (tmp_path / "Makefile").write_text(f"lint:\n\t@{lint}\ntest-scoped:\n\t@echo test >> verified\n")
+    result = subprocess.run(
+        [sys.executable, str(Path(agent_hook.__file__)), "stop"],
+        input=json.dumps({"cwd": str(nested)}),
+        text=True,
+        capture_output=True,
+        cwd=nested,
+    )
+    assert result.returncode == (2 if fail else 0)
+    if fail:
+        assert "verification failed: make lint" in result.stderr
+    else:
+        assert (tmp_path / "verified").read_text().splitlines() == ["lint", "test"]
+        assert json.loads(result.stdout) == {}
+
+
 def test_format_adapter_handles_edits_and_multifile_patches():
     assert agent_hook.changed_files({"tool_input": {"file_path": "hello.py"}}) == ["hello.py"]
     patch = "*** Update File: a.py\n@@\n-x\n+y\n*** Add File: b space.py\n+x\n*** Delete File: c.py\n"

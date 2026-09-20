@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -51,16 +52,29 @@ def editor_tasks(folders: list[Path], selected: str = "") -> list[dict]:
     return tasks
 
 
+def load_editor_config(path: Path) -> dict:
+    """Read VS Code's JSONC without treating comment syntax inside strings as comments."""
+    strings = r'("(?:\\.|[^"\\])*")'
+    text = re.sub(
+        strings + r"|/\*.*?\*/|//[^\r\n]*",
+        lambda match: match.group(1) or " ",
+        path.read_text(encoding="utf-8-sig"),
+        flags=re.DOTALL,
+    )
+    text = re.sub(strings + r"|,\s*(?=[}\]])", lambda match: match.group(1) or "", text)
+    return json.loads(text)
+
+
 def configure_editor(root: Path, selected: str = "") -> None:
     directory = root / ".vscode"
     directory.mkdir(exist_ok=True)
     path = directory / "tasks.json"
-    data = json.loads(path.read_text()) if path.exists() else {"version": "2.0.0"}
+    data = load_editor_config(path) if path.exists() else {"version": "2.0.0"}
     data["tasks"] = [task for task in data.get("tasks", []) if task.get("label") not in TASK_LABELS]
     data["tasks"].extend(editor_tasks([root], selected))
     path.write_text(json.dumps(data, indent=2) + "\n")
     path = directory / "settings.json"
-    settings = json.loads(path.read_text()) if path.exists() else {}
+    settings = load_editor_config(path) if path.exists() else {}
     settings["task.allowAutomaticTasks"] = "on"
     path.write_text(json.dumps(settings, indent=2) + "\n")
 

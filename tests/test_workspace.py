@@ -460,8 +460,8 @@ class TestCuttingASet:
         stale = fleet / "alpha" / ".worktrees" / "reused" / ".vscode"
         stale.mkdir(parents=True)
         (stale / "tasks.json").write_text(
-            '{"tasks": [{"label": "claude", "runOptions": {"runOn": "folderOpen"}}, '
-            '{"label": "dev", "command": "make dev"}]}'
+            '{ // local tasks\n"tasks": [{"label": "claude", "runOptions": {"runOn": "folderOpen"}}, '
+            '{"label": "dev", "command": "make dev",},],}'
         )
 
         workspace.main(["--root", str(fleet), "wt-set", "reused", "--headless"])
@@ -645,6 +645,18 @@ class TestRemovingEveryWorktree:
         assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 0
         for repo in ("alpha", "beta"):
             assert workspace.worktrees(fleet / repo) == []
+
+    def test_it_removes_worktrees_when_a_manifest_repo_is_not_cloned(
+        self, fleet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        workspace.main(["--root", str(fleet), "setup"])
+        shutil.rmtree(fleet / "alpha")
+        _plant(fleet, "partial", repos=("beta",))
+        _rm_stub(monkeypatch)
+        monkeypatch.chdir(fleet / "beta" / ".worktrees" / "partial")
+
+        assert workspace.main(["--root", str(fleet), "wt-rm-all", "--yes"]) == 0
+        assert workspace.worktrees(fleet / "beta") == []
 
     def test_the_tree_you_are_standing_in_goes_last(
         self, fleet: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture

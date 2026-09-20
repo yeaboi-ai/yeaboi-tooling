@@ -26,7 +26,10 @@ def main() -> int:
     raw = sys.stdin.read()
     payload = json.loads(raw)
     cwd = Path(payload.get("cwd") or os.getcwd()).resolve()
-    roots = [Path(path).resolve() for path in json.loads(os.getenv("YEABOI_AGENT_ROOTS", "[]"))] or [cwd]
+    roots = [Path(path).resolve() for path in json.loads(os.getenv("YEABOI_AGENT_ROOTS", "[]"))]
+    if not roots:
+        repo = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+        roots = [Path(repo.stdout.strip()).resolve() if repo.returncode == 0 else cwd]
     if mode == "stash":
         return subprocess.run(["bash", str(SCRIPTS / "guard-stash.sh")], input=raw, text=True, cwd=cwd).returncode
     if mode == "stop":
