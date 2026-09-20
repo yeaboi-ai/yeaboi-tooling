@@ -25,11 +25,19 @@
 
 ## Claude Code and Codex
 
-The repository facts live in `AGENTS.md` and `.agents/repo-notes.md`; `CLAUDE.md` imports
-`AGENTS.md`. Shared procedures have one implementation in the devkit's skills. Claude's existing
-slash commands read those skills, and `make agent-setup` links the pinned skills into Codex's
+Both CLIs read the root `AGENTS.md` natively; repository details live in `.agents/repo-notes.md`.
+Claude Code requires version 2.1.277 or later. Shared procedures have one implementation in the
+devkit's skills. Claude's existing slash commands read those skills, and `make agent-setup` links
+the pinned skills into Codex's
 `.agents/skills` discovery path. Repo-specific skills are tracked in `.agents/skills`, with Claude
 compatibility links. Never copy procedures into a second provider-specific implementation.
+
+Claude defaults to `AGENTS.md` when there is no project or ancestor `CLAUDE.md` or
+`CLAUDE.local.md`. If you keep personal project instructions in one of those files, select
+`claude-md-and-agents-md` under `/config` → **Project instructions**. After upgrading Claude,
+start a new session and check `/context` to confirm `AGENTS.md` loaded. See
+[Claude's native AGENTS.md documentation](https://code.claude.com/docs/en/memory#agents-md)
+for availability restrictions. Hosted workflow prompts explicitly read the shared file too.
 
 ```sh
 make agent-setup                         # first checkout / after bumping the tooling pin
