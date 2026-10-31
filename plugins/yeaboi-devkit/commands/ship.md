@@ -32,6 +32,11 @@ continuing. Never skip the verification steps.
 1. **Sanity.** Run `git branch --show-current`. If on `main`, stop: create a feature branch first.
    Then `git fetch origin` (you need it in step 3 and it costs nothing here).
 
+   Then find out whether this branch is a **layer in a `gh stack`**: `gh stack view --json` exits 0
+   and lists the current branch under `branches`. If so, note its parent (the entry before it, or the
+   trunk when it is the bottom layer): steps 3, 4 and 7 differ for a stack layer, because a layer's
+   base is the layer below, not `origin/main`. Exit 2 ("not in a stack") means a plain branch.
+
    This ships **this repo's worktree only**. Other repos may carry a same-named worktree — `make
    wt-new` cuts a feature in every repo — and their work is theirs to ship, from their own `/ship`.
    Nothing here looks at them until the PR is open (step 10), and nothing here ever asks whether to
@@ -49,16 +54,23 @@ continuing. Never skip the verification steps.
    Committing here, rather than after the review, is what makes steps 3 and 4 possible at all: you
    cannot rebase a dirty tree, and a diff taken before the commit does not contain the work.
 
-3. **Rebase onto `origin/main`.** `git rebase origin/main`. Resolve conflicts with the playbook in
+3. **Rebase onto `origin/main`.** On a plain branch: `git rebase origin/main`. On a stack layer:
+   `gh stack rebase`, which replays every layer onto `origin/main` in order, bottom first. Never run
+   `git rebase origin/main` on a middle or top layer by hand: it folds the layers below into this
+   one, and the PR then shows their diff as this layer's. Resolve conflicts with the playbook in
    `/sync-main` — read it rather than improvising, because "take the other side" is the wrong answer
-   for every generated file and produces a tree that merges green and reds CI.
+   for every generated file and produces a tree that merges green and reds CI (`gh stack rebase`
+   stops on a conflict with exit 3; resolve, `git add`, then `gh stack rebase --continue`).
 
-   If the branch was pushed before, the later push needs `--force-with-lease`.
+   If the branch was pushed before, the later push needs `--force-with-lease` (`gh stack push` does
+   this for every layer).
 
 4. **Independent verification (fresh context, no author bias) — IN THE BACKGROUND.** Spawn the
-   `code-reviewer` subagent. Give it ONLY: (a) the output of **`git diff origin/main...HEAD`**, and
-   (b) a one-paragraph description of what this branch was supposed to do — NOT this conversation's
-   history. Its checklist (spec fit, conventions, correctness) lives in the agent definition.
+   `code-reviewer` subagent. Give it ONLY: (a) the output of **`git diff origin/main...HEAD`** (on a
+   stack layer, **`git diff <parent>...HEAD`**, the parent from step 1, so the reviewer sees this
+   layer's diff and not the layers below), and (b) a one-paragraph description of what this branch
+   was supposed to do — NOT this conversation's history. Its checklist (spec fit, conventions,
+   correctness) lives in the agent definition.
 
    **`origin/main`, never the local `main` ref.** Local `main` in a worktree is routinely several
    commits behind, and a three-dot diff taken against it hands the reviewer other people's
@@ -90,11 +102,16 @@ continuing. Never skip the verification steps.
    git fetch origin && git rev-list --count HEAD..origin/main
    ```
 
-   If that is not `0`, rebase again (step 3's playbook) and re-run `make test-scoped`. Then
-   `git push -u origin <branch>` and `gh pr create` against `main` with:
+   If that is not `0`, rebase again (step 3's playbook) and re-run `make test-scoped`. Then, on a
+   plain branch, `git push -u origin <branch>` and `gh pr create` against `main`; on a stack layer,
+   `gh stack submit --auto --open` instead (it pushes every layer, opens the missing PRs with each
+   layer's base set to the layer below, and links them as a stack on GitHub, which is what makes
+   `gh stack merge` possible later; never `gh pr create --base <parent>` by hand, that is an unlinked
+   PR), then `gh pr edit <n>` to set the title and body. Either way the PR carries:
    - Title: same style as the commit message.
    - Body: a Summary section (what and why), a Test plan section (what was run), and the standard
-     "🤖 Generated with Claude Code" footer.
+     "🤖 Generated with Claude Code" footer. On a stack layer, one line naming the stack and the layer
+     below.
    - **No `## Demo` section yet.** A clip is attached *after* the PR exists: `/record` appends the
      section with `gh pr edit`. Do not offer it here — step 10 points at it if the change is worth
      seeing.
@@ -110,7 +127,9 @@ continuing. Never skip the verification steps.
    - `gh pr view --json mergeStateStatus` is not `BEHIND`, and
    - CI has not been superseded by a newer `origin/main` since step 7.
 
-   Then `gh pr merge --auto --squash`. If any condition fails, say so and skip this step.
+   Then `gh pr merge --auto --squash`. If any condition fails, say so and skip this step. A stack
+   layer never auto-merges one PR at a time: the stack merges as a whole with `gh stack merge <n>
+   --yes` once every layer is approved, so skip this step and say so.
 
    The middle condition is not ceremony: a ruleset that does not require a branch to be up to date
    before merging means `--auto` on a branch that has fallen behind merges a tree CI never built.
